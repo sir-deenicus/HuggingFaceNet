@@ -87,22 +87,6 @@ module Tensor =
 
     let toMatrix t = matrix (toJaggedArray2D t)
 
-    let argmax minvalue (t:Tensors.Tensor<_>) =
-        let dim = t.Dimensions.ToArray()
-        let mutable topIndex = 0
-        let mutable topScore = minvalue
-
-        match dim with 
-        | [|1|] -> 0
-        | [|w|] ->  
-            for i in 0..w - 1 do
-                if t.[i] > topScore then 
-                    topScore <- t.[i]
-                    topIndex <- i    
-            topIndex
-        | _ -> failwith "Dimension must be <= 1"
-
-    let argmaxf32 t = argmax Single.MinValue t
 
 module Array =
     let argmax minvalue (d:_[]) =

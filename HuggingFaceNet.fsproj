@@ -8,7 +8,9 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <None Include="lab.fsx" />
+    <None Include="tensor-extensions.fsx" />
+    <None Include="TestDocSnippets.fsx" />
+    <None Include="roberta-lab.fsx" />
     <Compile Include="Library.fs" />
   </ItemGroup>
 
