@@ -104,38 +104,6 @@ module Tensor =
 
     let argmaxf32 t = argmax Single.MinValue t
 
-    let argmax2Dr minvalue r (t:Tensors.Tensor<_>) =
-        let dim = t.Dimensions.ToArray()
-        let mutable topIndex = 0
-        let mutable topScore = minvalue
-        let revr = -r - 1
-        match dim with 
-        | [|_ ; h|] ->
-            if r < 0 then 
-                for i in 0..h - 1 do
-                    if t.[^revr, i] > topScore then 
-                        topScore <- t.[^revr, i]
-                        topIndex <- i    
-            else 
-                for i in 0..h - 1 do
-                    if t.[r, i] > topScore then 
-                        topScore <- t.[r, i]
-                        topIndex <- i    
-            topIndex
-        | [|1; _ ; h|] -> 
-            if r < 0 then 
-                for i in 0..h - 1 do
-                    if t.[0,^revr, i] > topScore then 
-                        topScore <- t.[0,^revr, i]
-                        topIndex <- i    
-            else 
-                for i in 0..h - 1 do
-                    if t.[0,r, i] > topScore then 
-                        topScore <- t.[0,r,i]
-                        topIndex <- i    
-            topIndex
-        | _ -> failwith "Effective Dimension must be = 2"
-         
 module Array =
     let argmax minvalue (d:_[]) =
         let mutable topIndex = 0
