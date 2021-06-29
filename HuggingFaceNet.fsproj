@@ -10,6 +10,7 @@
   <ItemGroup>
     <None Include="tensor-extensions.fsx" />
     <None Include="TestDocSnippets.fsx" />
+    <None Include="t5-lab.fsx" />
     <None Include="roberta-lab.fsx" />
     <Compile Include="Library.fs" />
   </ItemGroup>
