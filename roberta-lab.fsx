@@ -12,6 +12,7 @@ open Microsoft.ML.OnnxRuntime
 open System
 open Prelude.Common 
 open Prelude.Math 
+open Prelude 
 open BlingFire
 open MathNet.Numerics
 open MathNet.Numerics.LinearAlgebra
@@ -65,10 +66,7 @@ let generalTokenizer (tokenizerHandle: uint64) (s: string) =
 //Renaming for semantic purposes
 let robertaTokenizer (s: string) =
     generalTokenizer robertaTokHandle s 
-      
-let bartTokenizer (s: string) =
-    generalTokenizer robertaTokHandle s  
-
+         
 let bertTokenizer (s: string) =
     generalTokenizer bertTokHandle s  
 
@@ -84,7 +82,7 @@ let robertaDetokenizer (vocab:string []) tokens =
 //////////////////
 
 //The blingfire encoder removes newlines. Transformer LMs are quite sensitive to whitespace
-bartTokenizer ("A\nB")
+robertaTokenizer ("A\nB")
 
 let toks = robertaTokenizer "I don't think that's ribonucleic"
         
@@ -160,13 +158,11 @@ let robertaQA = new InferenceSession(@"D:\Downloads\NeuralNets\roberta-base-squa
 robertaQA.OutputMetadata
 
 //////////////////////////////////////
-//Stats on token size vs words len
-
+//Stats on token size vs words len 
 let testWordsSplit (s:string) =
-    robertaTokenizer s |> Array.length,  
-    s.Split(' ') |> Seq.length
+    {|Token = robertaTokenizer s |> Array.length; 
+      Words = Strings.splitToWordsRegEx s |> Array.length |}
 
-[581./727.; 788./1032.;244./322.; 530./741.; 565./771.; 2073./ 3270. ]
 
 //////////////////
 "I am going to the store. I bought a thing." |> robertaTokenizer 
@@ -187,7 +183,7 @@ There are several ways to go about this. One way is to recurse over the sentence
 The problem is that each of these arrays of tokens need to be concatenated but if we're doing that we might as well do it more clearly. One way to do this is to have an inner function build a current sentence so far and then returns the sentences that no longer fit and yields that array. Then recurse again on the rest of the sentences, repeat the above and so on and so forth recursively.
 *) 
 
-let tokenize maxlen i0 (sents: _ []) =
+let tokenize tokenizer maxlen i0 (sents: string []) =
     //Actually, I will use a buffer approach.
     //Recursive for early exit.
     let buffer = Array.create maxlen stopToken
@@ -195,7 +191,7 @@ let tokenize maxlen i0 (sents: _ []) =
 
     let rec loop i tokenlen =
         let sent = sents.[i]
-        let tokenized = robertaTokenizer sent
+        let tokenized : int [] = tokenizer sent
         let tokenlen' = tokenlen + tokenized.Length
 
         if tokenlen' + 1 < maxlen then // account for stop tag
@@ -211,10 +207,10 @@ let tokenize maxlen i0 (sents: _ []) =
 ///than just truncate we split by sentence and join sentences until they exhaust the window
 ///and then start a new window until all windows have been complete. Think of trying to 
 ///write a tweet thread were all tweets must contain only complete sentences.
-let tokenizeSplit maxlen (sents : _ []) =
+let tokenizeSplit tokenize maxlen (sents : _ []) =
     let rec loop i =
         [| if i < sents.Length then 
-            let s, j = tokenize maxlen i sents  
+            let (s : int []), j = tokenize maxlen i sents  
             if s.Length > 2 then yield s
             // if i = j and there're more sents left then a sentence was probably too long. We can either fail or skip. Given token window lens are > 300 to 600 words, I will choose to skip.
             let j' =
@@ -223,18 +219,21 @@ let tokenizeSplit maxlen (sents : _ []) =
             yield! loop j' |]
     loop 0
 
+let robertaTokenizeSplit maxlen (sents : _ []) = 
+    tokenizeSplit (tokenize robertaTokenizer) maxlen sents
+      
 let sents = BlingFireUtils.splitSentence TestDocSnippets.reals  
 
 let maxlen = 512// = 0
-
-tokenizeSplit 25 [|""|]
-tokenizeSplit 25 [|"A"|]
-tokenizeSplit 12 sents
-tokenizeSplit 15 sents 
-tokenizeSplit 20 sents 
-tokenizeSplit 32 sents 
-tokenizeSplit 50 sents 
-tokenizeSplit 512 sents 
+ 
+robertaTokenizeSplit 25 [|""|]
+robertaTokenizeSplit 25 [|"A"|]
+robertaTokenizeSplit 12 sents
+robertaTokenizeSplit 15 sents 
+robertaTokenizeSplit 20 sents 
+robertaTokenizeSplit 32 sents 
+robertaTokenizeSplit 50 sents 
+robertaTokenizeSplit 512 sents 
 
 sents.Length
 
@@ -243,10 +242,10 @@ let tokenlen= 1
 
 let stripTags (a:_[]) = a.[1..^1]
 
-tokenizeSplit 50 sents
+robertaTokenizeSplit 50 sents
 |> Array.collect stripTags = robertaTokenizer TestDocSnippets.reals
 
-tokenizeSplit 512 sents 
+robertaTokenizeSplit 512 sents 
 |> Array.concat
 |> stripTags = robertaTokenizer TestDocSnippets.reals 
 
@@ -254,20 +253,16 @@ Array.map robertaTokenizer sents
 
 Array.map (robertaTokenizer >> Array.length) sents //'|> Array.sum
   
-let formatforSquadQATruncate (context:string, question:string) = 
-    let truncate (s:string) =   
-        let split = s.Split(' ')
-        if split.Length > 360 then split.[..359] |> String.concat " " else s
+let tokenizeForSquadQA (context : string) (question : string) =
+    let q =
+        robertaTokenizeSplit 512 (BlingFireUtils.splitSentence question) 
+        |> Array.head
 
-    $"<s> {question} </s> <s> {truncate context} </s>"
-
-let formatforSquadQA (context:string, question:string) = 
-    let splitContext = context.Split(' ') |> Array.split_TakeN_atATime 360  
-    [|for context in splitContext -> 
-        let bcontext = String.concat " " context
-        $"<s> {question} </s> <s> {bcontext} </s>"|] 
-
-formatforSquadQA ("ABC", "EFD") |> Seq.head |> robertaTokenizer 
+    context
+    |> BlingFireUtils.splitSentence
+    |> robertaTokenizeSplit (512 - q.Length)
+    |> Array.map (fun c -> Array.append q c)
+     
 
 let runrobertaQA (robertaQA:InferenceSession) (tokens:int []) =
     let t = Tensors.ArrayTensorExtensions.ToTensor(array2D [|tokens|])
@@ -289,64 +284,81 @@ let runrobertaQA (robertaQA:InferenceSession) (tokens:int []) =
     {|Start = res.[0]; End = res.[1]|}
 
 ////////////////////
-
-let qas =  
-    formatforSquadQA ("I picked an apple, ate it then went next door to pick a banana.", 
-        "What door did I go through ?")
-    |> Array.map robertaTokenizer 
+let context, question = ("I picked an apple, ate it then went next door to pick a banana.", "What door did I go through ?")
+let qas = tokenizeForSquadQA context question
 let answers = Array.map (runrobertaQA robertaQA) qas
 
 answers.[0].Start 
 |> Array.map exp 
 |> Array.normalize
 |> Array.mapi (fun i p -> robertaDetokenizer vocab [qas.[0].[i]], p)
-|> Prelude.TextHistogram.genericHistogram float 20 
+|> TextHistogram.genericHistogram float 20 
 
 //////////////////////////////
 
+let questionAsk context question = 
+    let qas = tokenizeForSquadQA context question
+
+    printfn "%A" (Array.map Array.length qas)
+
+    let answers = Array.map (runrobertaQA robertaQA) qas
+
+    [| for n in 0 .. 2 do
+        for (i, ans) in Array.zip [| 0 .. answers.Length - 1 |] answers do
+            let start, sprob = Array.nthTop n ans.Start
+            let endIndex, eprob = Array.nthTop n ans.End
+
+            if exp sprob > 1.f then
+                let str =
+                    qas.[i].[start..endIndex]
+                    |> robertaDetokenizer vocab
+
+                if str <> "" && not (str.Contains "<s>") then
+                    yield
+                        {|  Snippet = str
+                            StartProb = exp sprob
+                            EndProb = exp eprob
+                            nth = n
+                            Para = i |}  |]
+
+
 let str = IO.File.ReadAllText (pathCombine DocumentsFolder "doc.txt")
 
-let qas = 
-    formatforSquadQA (str, 
-        "What is the main idea of this research ?")
-    |> Array.map (robertaTokenizer >> Array.head)
+let sents = BlingFireUtils.splitSentence str 
 
-let answers = Array.map (runrobertaQA robertaQA) qas
+questionAsk str "How was inflation solved ?"
 
-[| for n in 0 .. 2 do
-    [| for (i, a) in Array.zip [| 0 .. answers.Length - 1 |] answers do
-        let start, sp = Array.nthTop n a.Start
-        let endIndex, ep = Array.nthTop n a.End
-
-        if exp sp > 1.f then
-            let str =
-                qas.[i].[start..endIndex] |> robertaDetokenizer vocab
-
-            if str <> "" && not (str.Contains "<s>") then
-                yield str, exp sp, exp ep |] |]
-
+BlingFireUtils.GetWords str
+|> Seq.toArray
+|> Array.countBy id
+|> Array.sortByDescending snd
+///////
 BlingFireUtils.GetWords str 
 |> Seq.toArray 
 |> Array.countBy id 
 |> Array.sortByDescending snd 
-
-str |> BlingFireUtils.GetSentences |> Seq.toArray
+ 
 
 /////////////////////////
+testWordsSplit str
 
+[3285./3879.]
+
+//Using just space
+[581./727.; 788./1032.;244./322.; 530./741.; 565./771.; 2073./ 3270. ]
 /////////////////////// 
 
 let bartModelEncoder = new InferenceSession(@"D:\Downloads\NeuralNets\bart-large-cnn\bart-large-cnn-encoder.onnx")
 
 let bartModelDecoder = new InferenceSession(@"D:\Downloads\NeuralNets\bart-large-cnn\bart-large-cnn-decoder.onnx")
 
-let tok0 = bartTokenizer "This is a test." 
+let tok0 = robertaTokenizer "This is a test." 
 
 let tok0 = [|[|152; 16; 10; 1296; 1437|]|]
  
-let toks = bartTokenizer str |> Array.map appendStartEndTokens
+let toks = robertaTokenizeSplit 512 sents  
 
-let t = Tensors.ArrayTensorExtensions.ToTensor(array2D tok0)
+let t = Tensors.ArrayTensorExtensions.ToTensor(array2D [|toks.[0]|])
 
 t
 
@@ -365,7 +377,7 @@ outputs.Dispose()
 encoderStates.Dispose()  
 
 
-let greedySample (decoder:InferenceSession) maxlen encoderStates =
+let sample (decoder:InferenceSession) sampler maxlen encoderStates =
     
     let generatedTokens = ResizeArray startToken
     let mutable generated = Tensors.ArrayTensorExtensions.ToTensor(array2D [ [ startToken ] ])
@@ -384,7 +396,7 @@ let greedySample (decoder:InferenceSession) maxlen encoderStates =
 
         let result = decoded.AsTensor<float32>()   
          
-        let index = Array.argmaxf32 result.[0, ^0, *] 
+        let index = sampler result.[0, ^0, *] 
 
         if index <> stopToken then generatedTokens.Add index  
         
@@ -399,13 +411,21 @@ let greedySample (decoder:InferenceSession) maxlen encoderStates =
         c <- c + 1
         stop <- index = stopToken
 
-    robertaDetokenizer vocab (generatedTokens.ToArray())
+    robertaDetokenizer vocab (generatedTokens.ToArray()) 
 
-greedySample bartModelDecoder 50 encoderStates
+sample bartModelDecoder Array.argmaxf32 50 encoderStates
 
-//TODO improve splitting
-
-let runSummary (encoder: InferenceSession) (decoder: InferenceSession) seqlen toks =
+let generateSamples p (choices:_[]) =
+    let probs = [for i in 0..choices.Length - 1 -> i, exp (float choices.[i])] 
+                    
+    SampleSummarize.getLargeProbItems p probs 
+    |> List.normalizeWeights
+    |> List.toArray
+    |> Sampling.discreteSample
+ 
+ 
+let runSummary (encoder: InferenceSession) (decoder: InferenceSession) sampler 
+    seqlen toks =
     [| for tok in toks do
         let t =
             Tensors.ArrayTensorExtensions.ToTensor(array2D [| tok |])
@@ -418,21 +438,26 @@ let runSummary (encoder: InferenceSession) (decoder: InferenceSession) seqlen to
         encoderStates.Name <- "encoder_hidden_states"
 
         let str =
-            greedySample decoder seqlen encoderStates
+            sample decoder sampler seqlen encoderStates
 
         encoderStates.Dispose()
         outputs.Dispose()
         yield str |] 
 
+////////////////////////////
+//The bart models are resource hugs, slow, sometimes generate summaries that are highly misleading to outright wrong and I cannot seem to get model export
+//to not give inferences with extremely high entropy. If the probability mass is not so concentrated that greedy sampling works 
+//then the model is too impractical for interactive use. I'll not be using them.
+
 let distilbartModelEncoder = new InferenceSession(@"D:\Downloads\NeuralNets\distilbart-cnn-6-6\distilbart-cnn-6-6-encoder.onnx")
 
 let distilbartModelDecoder = new InferenceSession(@"D:\Downloads\NeuralNets\distilbart-cnn-6-6\distilbart-cnn-6-6-decoder.onnx")
 
-let tokens = bartTokenizer str |> Array.map appendStartEndTokens
+let tokens = robertaTokenizeSplit 512 sents  
 
-let ss1 = runSummary bartModelEncoder bartModelDecoder 200 tokens
+let ss1 = runSummary bartModelEncoder bartModelDecoder Array.argmaxf32 200 [|tokens|]
 
-let ss2 = runSummary distilbartModelEncoder distilbartModelDecoder 200 tokens
+let ss2 = runSummary distilbartModelEncoder distilbartModelDecoder (generateSamples 0.9)  200 [|tokens|]
 
 ss1
 
