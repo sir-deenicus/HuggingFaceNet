@@ -1,10 +1,8 @@
-﻿
-#r "System.Memory"
+﻿//#r "System.Memory"
 #I @"C:\Users\cybernetic\source\repos\"
 #r @"D:\Downloads\NeuralNets\onnx1.8\Microsoft.ML.OnnxRuntime.dll"
 #I @"C:\Users\cybernetic\.nuget\packages\"
 #r @"mathnet.numerics\4.15.0\lib\netstandard2.0\MathNet.Numerics.dll"
-#r @"newtonsoft.json\13.0.1-beta1\lib\netstandard2.0\Newtonsoft.Json.dll"
 #r @"mathnet.numerics.fsharp\4.15.0\lib\netstandard2.0\MathNet.Numerics.FSharp.dll"
 #r @"Prelude\Prelude\bin\Release\net5\Prelude.dll"
 

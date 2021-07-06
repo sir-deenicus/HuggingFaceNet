@@ -12,6 +12,8 @@
     <None Include="TestDocSnippets.fsx" />
     <None Include="t5-lab.fsx" />
     <None Include="roberta-lab.fsx" />
+    <None Include="tokenizers.fsx" />
+    <None Include="sampler.fsx" />
     <Compile Include="Library.fs" />
   </ItemGroup>
 
