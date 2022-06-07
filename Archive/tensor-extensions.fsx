@@ -10,7 +10,7 @@ open MathNet.Numerics.LinearAlgebra
 open Microsoft.ML.OnnxRuntime
 open MathNet.Numerics
 open System
-open Prelude.Math
+open Prelude.Math 
 
 
 type Tensors.Tensor<'a> with  
@@ -80,6 +80,30 @@ module Tensor =
             [| for i in 0..w - 1 ->
                 [| for j in 0..h - 1 -> t.[0, 0, i, j] |] |]
         | _ -> failwith "Incompatible dimensions"
+        
+    let toJaggedArray3D (t : Tensors.Tensor<_>) =
+        let dims = t.Dimensions.ToArray()
+        match dims with
+        | [| d; w; h |] ->
+            [| for i in 0..d - 1 ->
+                [| for j in 0..w - 1 ->
+                    [| for k in 0..h - 1 -> t.[i, j, k] |] |] |]
+                    
+        | [| 1; d; w; h |] ->
+            [| for i in 0..d - 1 ->
+                [| for j in 0..w - 1 ->
+                    [| for k in 0..h - 1 -> t.[0, i, j, k] |] |] |] 
+                    
+        | _ -> failwith "Incompatible dimensions"
+        
+    let toArray3D (t : Tensors.Tensor<_>) =
+        let dims = t.Dimensions.ToArray()
+        match dims with
+        | [| d; w; h |] ->
+            Array3D.init d w h (fun i j k -> t[i,j,k])
+        | [|1 ; d; w; h|] -> Array3D.init d w h (fun i j k -> t[0, i,j,k])
+            
+        | _ -> failwith "Incompatible dimensions"
 
     let toArray2D t = array2D (toJaggedArray2D t)
 
@@ -95,7 +119,7 @@ module Array =
             if d.[i] > topScore then 
                 topScore <- d.[i]
                 topIndex <- i    
-        topIndex
+        topIndex, topScore
 
     let argmaxf32 d = argmax Single.MinValue d
 
@@ -119,7 +143,7 @@ let m3 =
 
 let tm3 =
     m3 |> Tensors.ArrayTensorExtensions.ToTensor
-
+ 
 m3.[0, *, *]
 
 tm3.Dimensions.ToArray()
@@ -147,3 +171,6 @@ tm1.[*, ^1..] |> DenseMatrix.ofRowArrays
 
 tm1.[3, 1]
 
+let aa = Array4D.create 3 3 3 3 3
+aa |> sprintf "%A"
+ 

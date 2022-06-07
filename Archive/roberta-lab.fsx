@@ -72,6 +72,22 @@ let robertaDetokenizer (vocab:string []) tokens =
     |> lookUpFixHack 
      
 //////////////////
+let text = IO.File.ReadAllLines (@"C:\Users\cybernetic\Documents\cliptext-text.txt")
+let str2 = IO.File.ReadAllText (@"D:\Downloads\wikis\corpus.txt")
+
+let str = text |> String.concat "\n"
+
+BlingFireUtils.GetWords(str2) |> Seq.toArray |> Array.length
+
+robertaTokenizer str2 |> Array.length
+
+228_017. / 255_340.
+
+List.average [219705.;228_017.] / 255_340.
+
+
+6_625_905. / 7_471_204.
+
 bertTokenizer "A B"
 //The blingfire encoder removes newlines. Transformer LMs are quite sensitive to whitespace
 robertaTokenizer ("A\nB")
@@ -141,9 +157,7 @@ Strings.toUTF8Bytes "▲"
 Seq.map Char.IsLetterOrDigit "æ¼¢"
 
 ["âĢĿ"; "âĸ²"; "åŃĹ"; "âĢľ"] |> List.map (Seq.map Char.IsLetterOrDigit)
-
-
-
+  
 //////////////////////////////////////
 //Stats on token size vs words len 
 let testWordsSplit (s:string) =
@@ -241,12 +255,14 @@ let questionAsk robertaQA context question =
                             nth = n
                             Para = i |}  |]
 
-////////////////////
+
 ///////////////////////// 
 
-let robertaQA = new InferenceSession(@"D:\Downloads\NeuralNets\roberta-base-squad2\roberta-base-squad2.onnx")
+let robertaQA = new InferenceSession(@"D:\Downloads\NeuralNets\roberta-base-squad2\roberta-base-squad2.onnx", SessionOptions.MakeSessionOptionWithCudaProvider())
 
 robertaQA.OutputMetadata
+////////////////////
+
 
 let context, question = ("I picked an apple, ate it then went next door to pick a banana.", "What door did I go through ?")
 let qas = tokenizeForSquadQA context question
@@ -258,8 +274,7 @@ answers.[0].Start
 |> Array.mapi (fun i p -> robertaDetokenizer vocab [qas.[0].[i]], p)
 |> TextHistogram.genericHistogram float 20 
 
-//////////////////////////////
-
+////////////////////////////// 
  
 let str = IO.File.ReadAllText (pathCombine DocumentsFolder "doc.txt")
 
@@ -280,6 +295,7 @@ let str  = "The number r, which is the number of one-forms that the tensor T eat
 let qs = ["How can the problem with the reals be fixed?"; "what is the problem?"; "what is the goal"; "How can the problem be fixed?"]
 
 /////////////////////////
+
 testWordsSplit str
 
 [3285./3879.; 637. / 792.; 664. / 832.; 7345./9748.]
@@ -287,7 +303,29 @@ testWordsSplit str
 //Using just space
 [581./727.; 788./1032.;244./322.; 530./741.; 565./771.; 2073./ 3270. ]
 /////////////////////// 
+///Crude Test of Batch Advantage: There isn't....Which makes sense I think. With the GPU it makes 
+///sense to batch large matrices since GPUs prioritize throughput; transfer latency is
+///also a big issue. At least this saves me having to implement attention masks.
 
+let tokens =tokenizeForSquadQA str "What is the main idea ?"
+
+let t =
+    Tensors.ArrayTensorExtensions.ToTensor(
+        array2D [| tokens.[0]; tokens.[0]
+                   tokens.[0]; tokens.[0]
+                   tokens.[0]; tokens.[0] |]
+    )
+
+let outputs = robertaQA.Run [|NamedOnnxValue.CreateFromTensor("input_ids", t)|]
+  
+for _ in 1..6 do
+
+    let t = Tensors.ArrayTensorExtensions.ToTensor(array2D [|tokens.[0]|])
+
+    let outputs = robertaQA.Run [|NamedOnnxValue.CreateFromTensor("input_ids", t)|]
+
+    ()
+////////////////////////
 let bartModelEncoder = new InferenceSession(@"D:\Downloads\NeuralNets\bart-large-cnn\bart-large-cnn-encoder.onnx")
 
 let bartModelDecoder = new InferenceSession(@"D:\Downloads\NeuralNets\bart-large-cnn\bart-large-cnn-decoder.onnx")

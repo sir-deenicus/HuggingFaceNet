@@ -12,11 +12,12 @@ open Prelude
 let decoderSampler (decoder:InferenceSession) sampler stopToken maxlen encoderStates =
     
     let generatedTokens = ResizeArray<int>([|0|])
+    let probs = ResizeArray()
     let mutable generated = Tensors.ArrayTensorExtensions.ToTensor(array2D [ [ 0 ] ])
 
     let mutable c = 0
-    let mutable stop = false
-    let sw = Diagnostics.Stopwatch()
+    let mutable stop = false 
+    let mem = ResizeArray() 
 
     while c < maxlen && not stop do 
         let logits =
@@ -28,9 +29,15 @@ let decoderSampler (decoder:InferenceSession) sampler stopToken maxlen encoderSt
 
         let result = decoded.AsTensor<float32>()   
          
-        let index = sampler result.[0, ^0, *] 
+        let index, p = sampler result.[0, ^0, *] 
 
-        if index <> stopToken then generatedTokens.Add index  
+        mem.Add index
+
+        if mem.Count > 5 then mem.RemoveAt 0  
+
+        if index <> stopToken then 
+            generatedTokens.Add index  
+            probs.Add p
         
         generated <- 
             Tensors.ArrayTensorExtensions.ToTensor(array2D [| generatedTokens.ToArray() |])
@@ -38,24 +45,33 @@ let decoderSampler (decoder:InferenceSession) sampler stopToken maxlen encoderSt
         decoded.Dispose()
 
         logits.Dispose()
-
-        sw.Stop() 
+         
         c <- c + 1
-        stop <- index = stopToken
+        
+        if mem.Count >= 5 && Hashset(mem).Count = 1 then stop <- true
+        else stop <- index = stopToken
 
-    generatedTokens.ToArray()
+    generatedTokens.ToArray(), probs.ToArray()
 
-let basicSampler k p (choices:float32[]) =
-    let probs = [for i in 0..choices.Length - 1 -> i, exp (float choices.[i])] |> List.normalizeWeights
-    let choices = SampleSummarize.getLargeProbItems p probs |> List.toArray            
-    if k > 0 then
-        choices 
-        |> Array.rev 
-        |> Array.take k
-        |> Sampling.discreteSample
-    else Sampling.discreteSample choices
- 
- 
+let basicSampler k p (logits: float32 []) =
+    let probs =
+        [ for i in 0 .. logits.Length - 1 -> i, exp (float logits.[i]) ]
+        |> List.normalizeWeights
+
+    let choices =
+        SampleSummarize.getLargeProbItems p probs
+        |> List.toArray
+
+    let i =
+        if k > 0 then
+            choices
+            |> Array.rev
+            |> Array.take k
+            |> Sampling.discreteSample
+        else
+            Sampling.discreteSample choices
+
+    i, snd probs.[i] 
 
 let nnSampler (encoder: InferenceSession) (decoder: InferenceSession) detokenizer stoptoken sampler 
     seqlen toks =
@@ -70,9 +86,9 @@ let nnSampler (encoder: InferenceSession) (decoder: InferenceSession) detokenize
 
         encoderStates.Name <- "encoder_hidden_states"
 
-        let str =
+        let str, ps =
             decoderSampler decoder sampler stoptoken seqlen encoderStates
 
         encoderStates.Dispose()
         outputs.Dispose()
-        yield detokenizer str |] 
+        yield detokenizer str, ps |] 

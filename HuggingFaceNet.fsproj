@@ -2,23 +2,35 @@
 
   <PropertyGroup>
     <TargetFramework>net5.0</TargetFramework>
+	<LangVersion>preview</LangVersion>
     <GenerateDocumentationFile>true</GenerateDocumentationFile>
     <WarnOn>3390;$(WarnOn)</WarnOn>
     <Platforms>AnyCPU;x64</Platforms>
   </PropertyGroup>
 
   <ItemGroup>
-    <None Include="tensor-extensions.fsx" />
+    <None Include="lab\semantic-search.fsx" />
+    <None Include="Archive\tensor-extensions.fsx" />
+    <None Include="Archive\t5-lab.fsx" />
+    <None Include="Archive\roberta-lab.fsx" />
+    <None Include="Archive\tokenizers.fsx" />
+    <None Include="Archive\sampler.fsx" />
+    <Compile Include="Tensors.fs" />
+    <Compile Include="Tokenizers.fs" />
+    <Compile Include="ONNXnet.fs" />
     <None Include="TestDocSnippets.fsx" />
-    <None Include="t5-lab.fsx" />
-    <None Include="roberta-lab.fsx" />
-    <None Include="tokenizers.fsx" />
-    <None Include="sampler.fsx" />
-    <Compile Include="Library.fs" />
   </ItemGroup>
 
   <ItemGroup>
-    <PackageReference Include="BlingFireNuget" Version="0.1.7" />
+    <PackageReference Include="BlingFire" Version="1.0.1" />
+    <PackageReference Include="MathNet.Numerics.FSharp" Version="5.0.0" />
+    <PackageReference Include="MathNet.Numerics.MKL.Win-x64" Version="3.0.0" />
+    <PackageReference Include="Microsoft.ML.OnnxRuntime.Managed" Version="1.11.0" />
+    <PackageReference Include="SentencePieceDotNET" Version="1.0.0" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Folder Include="models\" />
   </ItemGroup>
 
 </Project>
