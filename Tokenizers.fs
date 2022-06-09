@@ -26,7 +26,17 @@ let splitSentence (s:string) =
         sents[^0] <- sents[^0][..^1]
         sents 
     else sents
+    
+let splitForBatch (s:string) =
+    splitSentence s 
+    |> Array.map (fun a -> [|a|])  
 
+let splitToDocumentBatch (s:string[]) =
+    s |> Array.map splitSentence
+    
+let liftToBatch (s:string[]) =
+    Array.map (fun a -> [|a|]) s  
+    
 let generalTokenizer (tokenizerHandle: uint64) (unkId:int) (s: string) =
     let inBytes = Text.Encoding.UTF8.GetBytes(s)
      
@@ -187,7 +197,7 @@ type BlingFireTokenizer(loc, startToken, stopToken, maxlen, unknownId, ?detokeni
     member t.BatchDetokenize(ids: Tensor<int>) =
         Tensor.toJaggedArray2D ids |> t.BatchDetokenize
 
-    member __.Close() =
+    member __.Dispose() =
         BlingFireUtils.FreeModel(tokHandle) |> ignore
 
     static member NewBertTokenizer(loc) =
@@ -200,4 +210,4 @@ type BlingFireTokenizer(loc, startToken, stopToken, maxlen, unknownId, ?detokeni
         member t.BatchDetokenize(ids: Tensor<int>) = t.BatchDetokenize ids
 
     interface IDisposable with
-        member t.Dispose() = t.Close()
+        member t.Dispose() = t.Dispose()
