@@ -1,4 +1,4 @@
-﻿module HuggingFaceNet.Tokenizers
+﻿module TensorNet.Tokenizers
 
 open Microsoft.ML.OnnxRuntime.Tensors
 open System
@@ -6,6 +6,11 @@ open BlingFire
 open TensorExtensions 
 open System.Collections.Generic
 
+[<RequireQualifiedAccess>]
+type PrependType =
+    | Multiple of string []
+    | Single of string 
+    
 type BatchedTokens<'n> = {
     TokenIds : 'n DenseTensor
     AttentionMasks : 'n DenseTensor
@@ -14,7 +19,11 @@ type BatchedTokens<'n> = {
 type ITokenizer<'n> =
     abstract member Tokenize : string -> 'n Tensor   
     abstract member Detokenize : 'n Tensor -> string     
-    abstract member BatchTokenize: string[] -> 'n BatchedTokens
+    abstract member BatchTokenize: string[] -> 'n BatchedTokens    
+    abstract member MultiBatchTokenize: string[][] -> int[] * 'n BatchedTokens    
+    abstract member MultiBatchTokenize: string[][] * int -> int[] * 'n BatchedTokens    
+    abstract member MultiBatchTokenize: string[][] * int * string -> int[] * 'n BatchedTokens    
+    abstract member MultiBatchTokenize: string[][] * int * string[] -> int[] * 'n BatchedTokens    
     abstract member BatchDetokenize : 'n Tensor -> string []
     
      
@@ -69,19 +78,30 @@ let inline attentionMaskAndPad (tokens : _ []) =
             |] 
     |] |> Array.map Array.unzip |> Array.unzip
     
-let tokenize (startToken, stopToken) tokenizer maxlen i0 (sents: string []) =
+let tokenize (startToken, stopToken, septoken) prepended tokenizer maxlen i0 (sents: string []) =
     //Actually, I will use a buffer approach.
     //Recursive for early exit.
     let buffer = Array.create maxlen stopToken
     let tokenlenInit = 
-        match startToken with 
-        | None -> 0 
-        | Some startToken ->  
-            buffer.[0] <- startToken; 1
+        let tokenlen =
+            match startToken with 
+            | None -> 0 
+            | Some startToken ->  
+                buffer.[0] <- startToken; 1
+        match prepended with 
+        | None -> tokenlen 
+        | Some txt -> 
+            let tokens : int [] = tokenizer txt
+            Array.Copy(tokens, 0, buffer, tokenlen, tokens.Length)
+            match septoken with 
+            | None -> tokenlen + tokens.Length + 1
+            | Some sep -> 
+                buffer[tokenlen + tokens.Length + 1] <- sep
+                tokenlen + tokens.Length + 2 //1 + 1
 
     let rec loop i tokenlen =
         let sent = sents.[i]
-        let tokenized : int [] = tokenizer sent
+        let tokenized = tokenizer sent
         let tokenlen' = tokenlen + tokenized.Length
 
         if tokenlen' + 1 < maxlen then // account for stop tag
@@ -109,6 +129,38 @@ let tokenizeSplit tokenize maxlen (sents : _ []) =
             yield! loop j' |]
     loop 0
  
+let appendStartEndTokens (startToken, stopToken) s =
+    [| match startToken with
+       | None -> ()
+       | Some startToken -> yield startToken
+       yield! s
+       yield stopToken |] 
+
+let flattenTokenBatch maxlen start (startToken, stopToken, sepToken) prepends tokenizer (s: _ []) =
+    let flattened =
+        [| for i in 0 .. s.Length - 1 do
+               let tokens =
+                   tokenizeSplit
+                       (tokenize
+                           (startToken, stopToken, sepToken)
+                           (Option.map (function
+                               | PrependType.Multiple ps -> ps[i]
+                               | PrependType.Single p -> p)
+                               prepends)
+                           tokenizer)
+                       maxlen
+                       s[i]
+
+               for j in 0 .. tokens.Length - 1 do
+                   start + i, tokens[j] 
+        |]
+
+    let lookup, flatids = Array.unzip flattened
+    let paddedIds, masks = attentionMaskAndPad flatids
+
+    lookup,
+    { TokenIds = Array2D.toTensor (array2D paddedIds)
+      AttentionMasks = Array2D.toTensor (array2D masks) }
 
 module BPE =
     let internal bytes =
@@ -126,35 +178,41 @@ module BPE =
                    n <- n + 1 |]
 
     let byte_encoder = Dictionary (dict (Seq.zip chars bytes))
+     
+     
+type GeneralTokenizer(startToken, stopToken, maxlen, ?sepToken) = 
+    let specialTokens =
+        HashSet [ 
+            match startToken with
+            | None -> ()
+            | Some t -> yield t
+            yield stopToken
+            match sepToken with
+            | None -> ()
+            | Some t -> yield t 
+        ]
+         
+    member __.SpecialTokens = specialTokens
 
-type BlingFireTokenizer(loc, startToken, stopToken, maxlen, unknownId, ?detokenizer) =
+    abstract member Tokenizer : string -> int[]
+    default __.Tokenizer s = failwith "not implemented"
+    
+    abstract member Detokenize : int[] * ?skipSpecialTokens:bool -> string
+    default __.Detokenize(ids: int [], ?skipSpecialTokens:bool) = 
+        failwith "not implemented"
 
-    let tokHandle = BlingFireUtils2.LoadModel loc
-
-    let appendStartEndTokens s =
-        [| match startToken with
-           | None -> ()
-           | Some startToken -> yield startToken
-           yield! s
-           yield stopToken |] 
-
-    member __.TokenizeToArray(s: string) = generalTokenizer tokHandle unknownId s
-
-    member __.Detokenize(ids: int [], ?skipSpecialTokens) =
-        let skiptok = (defaultArg skipSpecialTokens true)  
-        match detokenizer with 
-        | None -> failwith "No detokenizer provided"
-        | Some detokenizer -> detokenizer skiptok ids 
-        
-    member __.TokenizeSplit(s: string []) =
+    member t.TokenizeSplit(s: string [], ?prepend) =
         let tokens =
-            tokenizeSplit (tokenize (startToken, stopToken) (generalTokenizer tokHandle unknownId)) maxlen s
+            tokenizeSplit
+                (tokenize (startToken, stopToken, sepToken) prepend t.Tokenizer)
+                maxlen
+                s
 
         attentionMaskAndPad tokens
 
-    member __.Tokenize(s: string) =
-        generalTokenizer tokHandle unknownId s
-        |> appendStartEndTokens
+    member t.Tokenize(s: string) =
+        t.Tokenizer s
+        |> appendStartEndTokens (startToken, stopToken)
         |> Array.toTensor
 
     member t.BatchTokenize(s: string []) =
@@ -170,27 +228,114 @@ type BlingFireTokenizer(loc, startToken, stopToken, maxlen, unknownId, ?detokeni
         { TokenIds = Array2D.toTensor (array2D tks)
           AttentionMasks = Array2D.toTensor (array2D masks) }
 
-    member t.BatchTokenize(s: string [] []) =
-        let mutable k = -1
+    member t.BatchTokenize(s: string [] [], ?startindex, ?prepends) =
+        let start = defaultArg startindex 0
 
-        let flattened =
-            [| for i in 0 .. s.Length - 1 do 
-                let tokens =
-                    tokenizeSplit
-                        (tokenize 
-                            (startToken, stopToken) 
-                            (generalTokenizer tokHandle unknownId)) maxlen s[i]
+        flattenTokenBatch
+            maxlen
+            start
+            (startToken, stopToken, sepToken)
+            prepends
+            t.Tokenizer
+            s
 
-                for j in 0 .. tokens.Length - 1 do
-                    k <- k + 1
-                    (k, i), tokens[j] |]
+    member t.BatchTokenize(s: string [] [], prepends: string [], ?startindex: int) =
+        t.BatchTokenize(s, ?startindex = startindex, ?prepends = Some(PrependType.Multiple prepends))
 
-        let lookup, flatids = Array.unzip flattened
-        let paddedIds, masks = attentionMaskAndPad flatids
+    member t.BatchTokenize(s: string [] [], prepend: string, ?startindex: int) =
+        t.BatchTokenize(s, ?startindex = startindex, ?prepends = Some(PrependType.Single prepend))
 
-        dict lookup,
-        { TokenIds = Array2D.toTensor (array2D paddedIds)
+    member t.BatchDetokenize(ids: int [] []) = Array.map t.Detokenize ids
+
+    member t.BatchDetokenize(ids: Tensor<int>) =
+        Tensor.toJaggedArray2D ids |> t.BatchDetokenize
+
+    interface ITokenizer<int> with
+        member t.Tokenize(s: string) = t.Tokenize s
+        member t.BatchTokenize(s: string []) = t.BatchTokenize s
+        member t.MultiBatchTokenize(s: string [] []) = t.BatchTokenize(s)
+        member t.MultiBatchTokenize(s: string [] [], startindex: int) = t.BatchTokenize(s, startindex)
+
+        member t.MultiBatchTokenize(s: string [] [], startindex: int, prepends: string []) =
+            t.BatchTokenize(s, prepends, startindex)
+
+        member t.MultiBatchTokenize(s: string [] [], startindex: int, prepend: string) =
+            t.BatchTokenize(s, prepend, startindex)
+
+        member t.Detokenize(ids: Tensor<int>) = t.Detokenize(Tensor.toArray ids)
+        member t.BatchDetokenize(ids: Tensor<int>) = t.BatchDetokenize ids
+         
+
+
+type BlingFireTokenizer(loc, startToken, stopToken, maxlen, unknownId, ?detokenizer, ?sepToken) =
+
+    let tokHandle = BlingFireUtils2.LoadModel loc
+
+    let specialTokens =
+        HashSet [ 
+            match startToken with
+            | None -> ()
+            | Some t -> yield t
+            yield stopToken
+            match sepToken with
+            | None -> ()
+            | Some t -> yield t 
+        ]
+
+    member __.TokenizerHandle = tokHandle
+
+    member __.TokenizeToArray(s: string) = generalTokenizer tokHandle unknownId s
+
+    member __.Detokenize(ids: int [], ?skipSpecialTokens) =
+        let skiptok = (defaultArg skipSpecialTokens true)
+
+        match detokenizer with
+        | None -> failwith "No detokenizer provided"
+        | Some detokenizer -> detokenizer skiptok specialTokens ids
+
+    member __.TokenizeSplit(s: string [], ?prepend) =
+        let tokens =
+            tokenizeSplit
+                (tokenize (startToken, stopToken, sepToken) prepend (generalTokenizer tokHandle unknownId))
+                maxlen
+                s
+
+        attentionMaskAndPad tokens
+
+    member __.Tokenize(s: string) =
+        generalTokenizer tokHandle unknownId s
+        |> appendStartEndTokens (startToken, stopToken)
+        |> Array.toTensor
+
+    member t.BatchTokenize(s: string []) =
+        let tks, masks = t.TokenizeSplit s
+
+        { TokenIds = Array2D.toTensor (array2D tks)
           AttentionMasks = Array2D.toTensor (array2D masks) }
+
+    member t.BatchTokenize(s: string) =
+        let strs = BlingFireUtils.GetSentences s |> Seq.toArray
+        let tks, masks = t.TokenizeSplit strs
+
+        { TokenIds = Array2D.toTensor (array2D tks)
+          AttentionMasks = Array2D.toTensor (array2D masks) }
+
+    member t.BatchTokenize(s: string [] [], ?startindex, ?prepends) =
+        let start = defaultArg startindex 0
+
+        flattenTokenBatch
+            maxlen
+            start
+            (startToken, stopToken, sepToken)
+            prepends
+            (generalTokenizer tokHandle unknownId)
+            s
+
+    member t.BatchTokenize(s: string [] [], prepends: string [], ?startindex: int) =
+        t.BatchTokenize(s, ?startindex = startindex, ?prepends = Some(PrependType.Multiple prepends))
+
+    member t.BatchTokenize(s: string [] [], prepend: string, ?startindex: int) =
+        t.BatchTokenize(s, ?startindex = startindex, ?prepends = Some(PrependType.Single prepend))
 
     member t.BatchDetokenize(ids: int [] []) = Array.map t.Detokenize ids
 
@@ -203,11 +348,88 @@ type BlingFireTokenizer(loc, startToken, stopToken, maxlen, unknownId, ?detokeni
     static member NewBertTokenizer(loc) =
         new BlingFireTokenizer(IO.Path.Combine(loc, "bert_base_tok.bin"), Some 101, 102, 512, 100)
 
+    static member NewRobertaTokenizer(loc) =
+        new BlingFireTokenizer(IO.Path.Combine(loc, "roberta.bin"), Some 0, 2, 512, 3)
+
     interface ITokenizer<int> with
         member t.Tokenize(s: string) = t.Tokenize s
         member t.BatchTokenize(s: string []) = t.BatchTokenize s
+        member t.MultiBatchTokenize(s: string [] []) = t.BatchTokenize(s)
+        member t.MultiBatchTokenize(s: string [] [], startindex: int) = t.BatchTokenize(s, startindex)
+
+        member t.MultiBatchTokenize(s: string [] [], startindex: int, prepends: string []) =
+            t.BatchTokenize(s, prepends, startindex)
+
+        member t.MultiBatchTokenize(s: string [] [], startindex: int, prepend: string) =
+            t.BatchTokenize(s, prepend, startindex)
+
         member t.Detokenize(ids: Tensor<int>) = t.Detokenize(Tensor.toArray ids)
         member t.BatchDetokenize(ids: Tensor<int>) = t.BatchDetokenize ids
 
     interface IDisposable with
         member t.Dispose() = t.Dispose()
+         
+
+         
+type BlingFireTokenizer2(loc, startToken, stopToken, maxlen, unknownId, ?detokenizer, ?sepToken) =
+    inherit GeneralTokenizer(startToken, stopToken, maxlen, ?sepToken = sepToken)
+    let tokHandle = BlingFireUtils2.LoadModel loc
+
+    member __.TokenizerHandle = tokHandle
+
+    override t.Tokenizer s =
+        generalTokenizer tokHandle unknownId s
+
+    override t.Detokenize(ids: int [], ?skipSpecialTokens) =
+        let skiptok = (defaultArg skipSpecialTokens true)
+
+        match detokenizer with
+        | None -> failwith "No detokenizer provided"
+        | Some detokenizer -> detokenizer skiptok t.SpecialTokens ids
+         
+    member __.Dispose() =
+        BlingFireUtils.FreeModel(tokHandle) |> ignore
+
+    
+    static member NewBertTokenizer(loc) =
+        new BlingFireTokenizer2(IO.Path.Combine(loc, "bert_base_tok.bin"), Some 101, 102, 512, 100)
+
+    static member NewRobertaTokenizer(loc) =
+        new BlingFireTokenizer2(IO.Path.Combine(loc, "roberta.bin"), Some 0, 2, 512, 3) 
+
+    interface IDisposable with
+        member t.Dispose() = t.Dispose()
+         
+
+type SentencePieceTokenizer(loc, startToken, stopToken, maxlen, ?sepToken) =
+    inherit GeneralTokenizer(startToken, stopToken, maxlen, ?sepToken = sepToken)
+    let spiece = new SentencePieceDotNET.SentencePieceDotNET()
+
+    do spiece.Load(loc)
+
+    override t.Tokenizer s = spiece.Encode(s) 
+
+    override t.Detokenize(ids: int [], ?skipSpecialTokens) =
+        match skipSpecialTokens with
+        | Some true ->
+            ids
+            |> Array.filter (t.SpecialTokens.Contains >> not)
+        | _ -> ids
+        |> spiece.Decode
+
+            
+    member t.Dispose() = spiece.Dispose() 
+    
+    interface IDisposable with
+        member t.Dispose() = t.Dispose()
+     
+    
+          
+        
+
+    
+
+    
+    
+            
+    

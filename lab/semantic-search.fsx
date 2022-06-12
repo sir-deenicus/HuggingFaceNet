@@ -16,8 +16,7 @@ open TensorExtensions
 open Prelude.Common
 open MathNet.Numerics.LinearAlgebra
 open MathNet.Numerics.LinearAlgebra.MatrixExtensions
-open Newtonsoft.Json
-
+open Newtonsoft.Json 
 
 let model = new ONNX.NNet<float32>(@"D:\Downloads\NeuralNets\all-MiniLM-L6-v2\all-MiniLM-L6-v2.onnx")
 let model2 = new ONNX.NNet<float32>(@"D:\Downloads\NeuralNets\all-MiniLM-L6-v2\all-MiniLM-L6-v2-opt.onnx")
@@ -32,25 +31,23 @@ let bertTokenizer = Tokenizers.BlingFireTokenizer.NewBertTokenizer(@"D:\Download
      
 
 let corpus = [|
-        "A man is eating food.";
-        "A man is eating a piece of bread.";
-        "The girl is carrying a baby.";
-        "A man is riding a horse.";
-        "A woman is playing violin.";
-        "Two men pushed carts through the woods.";
-        "A man is riding a white horse on an enclosed ground.";
-        "A monkey is playing drums.";
-        "the cat went out and about";
-        "A cheetah is running behind its prey.";
-        "Crystallographers will be presenting their novel research";
-        "The felines are playing";
-        "We made a scientific discovery on the nature of the minerals";
-        "We found some interesting new facts about these rocks"|]
+    "A man is eating food.";
+    "A man is eating a piece of bread.";
+    "The girl is carrying a baby.";
+    "A man is riding a horse.";
+    "A woman is playing violin.";
+    "Two men pushed carts through the woods.";
+    "A man is riding a white horse on an enclosed ground.";
+    "A monkey is playing drums.";
+    "the cat went out and about";
+    "A cheetah is running behind its prey.";
+    "Crystallographers will be presenting their novel research";
+    "The felines are playing";
+    "We made a scientific discovery on the nature of the minerals";
+    "We found some interesting new facts about these rocks"
+|]
         
-let l, r = bertTokenizer.BatchTokenize(
-                corpus
-                |> Array.map Array.lift
-            )
+let l, r = bertTokenizer.BatchTokenize(corpus |> Array.map Array.lift)
 
 l
 r.AttentionMasks |> Tensor.toArray2D
@@ -70,7 +67,7 @@ m[0, *] *  m[1, *]
 
 m[0, *].Norm(2.)
 
-m * m.Transpose()
+let sim = m * m.Transpose()
 m2 * m2.Transpose()
 m3 * m3.Transpose()
 
@@ -78,3 +75,6 @@ m3 * m3.Transpose()
  
 (m - m3) |> Matrix.Abs |> Matrix.toRowArrays |> Array.map Array.average
 (m - m3) |> Matrix.Abs |> Matrix.toRowArrays |> Array.concat |> Array.average
+
+
+Array.zip corpus (sim[12, *].ToArray()) |> Array.sortByDescending snd 

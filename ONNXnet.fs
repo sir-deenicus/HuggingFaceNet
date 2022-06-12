@@ -1,4 +1,4 @@
-﻿namespace HuggingFaceNet
+﻿namespace TensorNet
 
 open System.Collections.Generic
 open Microsoft.ML.OnnxRuntime
@@ -35,7 +35,7 @@ module ONNX =
         let disposables = ResizeArray()
         let sessionOptions = InferenceSessionOptions
 
-        let internalNet =
+        let newInternalNet() =
             match (inferenceSession, loc) with
             | Some session, _ -> session
             | None, Some loc ->
@@ -44,6 +44,7 @@ module ONNX =
                 | None -> new InferenceSession(loc)
             | None, None -> failwith "Either inferenceSession or loc must be specified"
 
+        let mutable internalNet = newInternalNet()
         let keys = Seq.toArray internalNet.InputMetadata.Keys
 
         member __.Run(input: _ [,,,]) =
@@ -119,8 +120,8 @@ module ONNX =
 
                 d.Dispose()
 
-            disposables.Clear()
-
+            disposables.Clear() 
+            
         member t.Dispose() =
             t.GC()
             internalNet.Dispose()
@@ -128,6 +129,11 @@ module ONNX =
             match sessionOptions with
             | None -> ()
             | Some sessionOptions -> sessionOptions.Dispose()
+            
+        member t.ResetMemory() =
+            t.GC()
+            internalNet.Dispose()
+            internalNet <- newInternalNet() 
 
         member __.InputKeys = keys
 
@@ -202,7 +208,7 @@ module ONNX =
             blocked.Clear()
             generatedTokens.ToArray(), probs.ToArray()
 
-        let decoderStep decoderInputName encoderStates (tokens:int64[]) =
+        let decoderStep decoderInputName encoderStates (tokens:_[]) =
             let generated = Tensor.ofNestedSeq2D [ tokens ]
             let logits =
                 decoder.RunT(
