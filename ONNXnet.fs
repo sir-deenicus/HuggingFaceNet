@@ -82,6 +82,14 @@ module ONNX =
             disposables.Add result
             [| for r in result -> r.AsTensor<'a>() |]
 
+        member __.RunT(input: Tensors.DenseTensor<int64>, attention_mask: Tensors.DenseTensor<int64>) =
+            let result =
+                internalNet.Run [| NamedOnnxValue.CreateFromTensor(keys[0], input)
+                                   NamedOnnxValue.CreateFromTensor(keys[1], attention_mask) |]
+
+            disposables.Add result
+            [| for r in result -> r.AsTensor<'a>() |]
+
         member __.Run(input: Collections.Generic.IDictionary<string, Tensors.DenseTensor<'a>>) =
             let result =
                 internalNet.Run [| for KeyValue (key, tensor) in input -> NamedOnnxValue.CreateFromTensor(key, tensor) |]
@@ -89,9 +97,9 @@ module ONNX =
             disposables.Add result
             Seq.toArray result
 
-        member __.RunT(input: Collections.Generic.IDictionary<string, Tensors.DenseTensor<'a>>) =
+        member __.RunT(input: seq<string * Tensors.Tensor<'a>>) =
             let result =
-                internalNet.Run [| for KeyValue (key, tensor) in input -> NamedOnnxValue.CreateFromTensor(key, tensor) |]
+                internalNet.Run [| for (key, tensor) in input -> NamedOnnxValue.CreateFromTensor(key, tensor) |]
 
             disposables.Add result
             [| for r in result -> r.AsTensor<'a>() |]
@@ -147,7 +155,7 @@ module ONNX =
             member t.Dispose() = t.Dispose()
             
 
-    type EncoderDecoderSampler(startToken, stopToken, encoder:NNet<float32>, decoder:NNet<float32>, ?sampler, ?batchsize, ?blockStartTokenAtIndex, ?sentenceEndTokens : HashSet<int64>, ?countBySentences) = 
+    type EncoderDecoderSampler(encoder:NNet<float32>, decoder:NNet<float32>, startToken, stopToken, ?sampler, ?batchsize, ?blockStartTokenAtIndex, ?sentenceEndTokens : HashSet<int64>, ?countBySentences) = 
         let sentenceEndTokens = defaultArg sentenceEndTokens (HashSet())
         let countsents = defaultArg countBySentences false
 
@@ -161,7 +169,7 @@ module ONNX =
         let mem = ResizeArray() 
         let blocked = HashSet()
         let argmax (a:_[]) =
-            if mem.Count >= blockStartTokenAtIndex then blocked.Add (int startToken) |> ignore
+            if mem.Count >= blockStartTokenAtIndex then blocked.Add (startToken) |> ignore
             Array.argmaxf32b blocked a
 
         let samplerfn = defaultArg sampler argmax  
@@ -169,9 +177,9 @@ module ONNX =
         //Do max sentences instead of maxlen
         let decoderSampler decoderInputName maxlen encoderStates = 
         
-            let generatedTokens = ResizeArray<int64>([|startToken|])
+            let generatedTokens = ResizeArray<int>([| startToken |])
             let probs = ResizeArray()
-            let mutable generated = Tensor.ofNestedSeq2D [ [ startToken ] ]
+            let mutable generated = Tensor.ofNestedSeq2D [ [ startToken  ] ]
 
             let mutable c = 0
             let mutable stop = false 
@@ -232,10 +240,12 @@ module ONNX =
             encoder.GC()
             str, ps  
 
-        member private __.encoderDecoderSampler inputname encHiddenStatesName decoderInputsName seqlen (encoderInput: _ []) =  
+        member private __.encoderDecoderSampler inputname encHiddenStatesName attentionMaskName decoderInputsName seqlen (encoderInput: _ []) =  
             encoder.GC()
-
-            let input  = [| [ encoderInput ] |> array2D |> Array2D.toTensor |> Tensor.toOnnxValue inputname |]
+            let attentionMask = Array.create encoderInput.Length 1 
+            let input  = [| [ encoderInput ] |> Tensor.ofNestedSeq2D |> Tensor.toOnnxValue inputname
+                            [ attentionMask] |> Tensor.ofNestedSeq2D |> Tensor.toOnnxValue attentionMaskName |]
+            
             let h = encoder.Run(input)[0]
 
             h.Name <- encHiddenStatesName 
@@ -257,25 +267,45 @@ module ONNX =
                 (defaultArg seqlen 120)
                 input 
 
-        member t.Run(input: _ [], ?seqlen, ?InputName, ?EncoderHiddenStatesName, ?DecoderInputsName) = 
+        member t.Run(input: int [], ?seqlen, ?InputName, ?EncoderHiddenStatesName, ?DecoderInputsName, ?AttentionMaskName) = 
             t.encoderDecoderSampler
                 (defaultArg InputName "input_ids")
                 (defaultArg EncoderHiddenStatesName "encoder_hidden_states")
+                (defaultArg AttentionMaskName "attention_mask")
                 (defaultArg DecoderInputsName "input_ids") 
                 (defaultArg seqlen 120)
                 input
 
-        member t.RunDecoderStep (input: _ [], ?encoderHiddenState,  ?DecoderInputsName) = 
+        member t.RunDecoderStep (input: _ [], ?encoderHiddenState, ?DecoderInputsName) = 
             let encoderstate = 
-                match currentEncoderState with 
-                | None -> failwith "No encoder state"
+                match encoderHiddenState with
                 | Some h -> h 
+                | None ->  
+                    match currentEncoderState with 
+                    | None -> failwith "No encoder state"
+                    | Some h -> h 
 
             decoderStep
                 (defaultArg DecoderInputsName "input_ids")
                 encoderstate 
                 input
 
+        member __.EncoderHiddenState with get() = currentEncoderState and set h = currentEncoderState <- h
+        member t.RunDecoderSampler(?encoderHiddenState, ?seqlen, ?DecoderInputsName) = 
+            let encoderstate = 
+                match encoderHiddenState with
+                | Some h -> h 
+                | None ->  
+                    match currentEncoderState with 
+                    | None -> failwith "No encoder state"
+                    | Some h -> h 
+        
+            decoderSampler
+                (defaultArg DecoderInputsName "input_ids")
+                (defaultArg seqlen 120)
+                encoderstate  
+
+                
         member t.RunEncoder(input : _ []) =
             encoder.GC()
             let input  = [| [ input ] |> array2D |> Array2D.toTensor |> Tensor.toOnnxValue "input_ids" |]
@@ -287,6 +317,7 @@ module ONNX =
             member t.Dispose() = 
                 encoder.Dispose()
                 decoder.Dispose()
+                currentEncoderState |> Option.iter (fun t -> t.Dispose())
                 currentEncoderState <- None
                 mem.Clear()
                 blocked.Clear() 
@@ -341,6 +372,7 @@ module ONNX =
                 
                 if countsents then 
                     if sentenceEndTokens.Contains index then c <- c + 1
+                    
                 else c <- c + 1
                 
                 if mem.Count >= 5 && HashSet(mem).Count = 1 then stop <- true
@@ -371,3 +403,4 @@ module ONNX =
                 decoder.Dispose()
                 mem.Clear()
                 blocked.Clear()
+                

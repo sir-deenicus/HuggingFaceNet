@@ -22,7 +22,7 @@ open Sampler
 
 let spiece = new SentencePieceDotNET.SentencePieceDotNET()
 
-spiece.Load(@"D:\Downloads\NeuralNets\xglm-564M\sentencepiece.bpe.model")  
+spiece.Load(@"D:\Downloads\NeuralNets\unifiedqa-v2-t5-large\spiece.model")  
 spiece.Encode("私たちは、多くの訪")
 let t5TokenizerInfo = {StartToken = None; StopToken = 1}
  
@@ -56,14 +56,17 @@ let str2 = IO.File.ReadAllText (@"D:\Downloads\wikis\corpus.txt")
 
 let str = text |> String.concat "\n"
 
-(t5Tokenizer str |> Array.length) * sizeof<int>
+(t5Tokenizer str |> Array.length) * sizeof<int16>
 
-str.Length * sizeof<string>
+str.Length * sizeof<byte>
 
 let b = pickler.Pickle(t5Tokenizer str)
 //write to documents
-IO.File.WriteAllText(@"C:\Users\cybernetic\Documents\str1ds.txt", str)
+IO.File.WriteAllText(@"C:\Users\cybernetic\Documents\strs.txt", str)
+//does strs.txt exist?
+IO.File.Exists(@"C:\Users\cybernetic\Documents\strs.txt")
 //serialize with fspickler
+IO.File.WriteAllBytes(@"C:\Users\cybernetic\Documents\strids.bin", b)
 
 
 228_017. / 255_340.

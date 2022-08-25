@@ -2,7 +2,7 @@
 #I @"C:\Users\cybernetic\source\repos\" 
 #r @"BlingFire\bin\Release\net5.0\BlingFire.dll"
 #r @"Prelude\Prelude\bin\Release\net5\Prelude.dll"
-#r @"..\bin\x64\Debug\net5.0\HuggingFaceNet.dll"
+#r @"..\bin\x64\Debug\net5.0\TensorNet.dll"
 #r @"mathnet.numerics\5.0.0\lib\net5.0\MathNet.Numerics.dll"
 #r @"mathnet.numerics.fsharp\5.0.0\lib\net5.0\MathNet.Numerics.FSharp.dll"
 #r @"D:\Downloads\NeuralNets\onnx1.11\Microsoft.ML.OnnxRuntime.dll"  
@@ -10,7 +10,7 @@
 
 #time "on"
 
-open HuggingFaceNet 
+open TensorNet 
 open TensorExtensions
 
 open Prelude.Common
@@ -27,8 +27,6 @@ Tokenizers.initBlingFire @"D:\Downloads\NeuralNets\blingfire\blingfiretokdll.dll
 
 let bertTokenizer = Tokenizers.BlingFireTokenizer.NewBertTokenizer(@"D:\Downloads\NeuralNets\blingfire\")
  
-[|101; 2057; 2253; 2188; 102|] = Tensor.toArray (bertTokenizer.Tokenize("we went home")) 
-     
 
 let corpus = [|
     "A man is eating food.";
@@ -51,6 +49,7 @@ let l, r = bertTokenizer.BatchTokenize(corpus |> Array.map Array.lift)
 
 l
 r.AttentionMasks |> Tensor.toArray2D
+r.TokenIds |> Tensor.toArray2D
 
 let res = model.RunT(r.TokenIds, r.AttentionMasks)
 let res2 = model2.RunT(r.TokenIds, r.AttentionMasks)
