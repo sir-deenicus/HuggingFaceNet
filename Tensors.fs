@@ -1,4 +1,4 @@
-﻿module HuggingFaceNet.TensorExtensions
+﻿module TensorNet.TensorExtensions
 
 open System.Collections.Generic
 open Microsoft.ML.OnnxRuntime
@@ -21,19 +21,7 @@ module Array =
         topIndex, topScore
 
     let argmaxf32 d = argmax Single.MinValue d
-
-    let argmaxb minvalue (blockedIndices : HashSet<_>) (d:_[]) =
-        let mutable topIndex = 0
-        let mutable topScore = minvalue
-
-        for i in 0..d.Length - 1 do
-            if d.[i] > topScore && not (blockedIndices.Contains i) then 
-                topScore <- d.[i]
-                topIndex <- i    
-        topIndex, topScore
-
-    let argmaxf32b (blockedIndices : HashSet<_>) d = argmaxb Single.MinValue blockedIndices d
-
+     
 module Array2D =
     let shape (a: 'a[,]) = [|Array2D.length1 a; Array2D.length2 a|]
 
@@ -133,13 +121,13 @@ type Tensors.Tensor<'a> with
 
     member t.Shape = t.Dimensions.ToArray()
 
-
     member t.ToOnnxValue(name:string) =
         NamedOnnxValue.CreateFromTensor(name, t)
 
 
 module Tensor =  
-
+    let shape (t : Tensors.Tensor<_>) = t.Shape
+    
     let toOnnxValue tensorname (t: Tensors.Tensor<_>) = NamedOnnxValue.CreateFromTensor(tensorname, t)
 
     let ofNestedSeq2D s = s |> array2D |> Array2D.toTensor
@@ -152,6 +140,23 @@ module Tensor =
         | [|1; d|] -> [| for i in 0..d-1 -> t[0, i]|]
 
         | _ -> failwith "Incompatible dimensions"
+
+    
+    let argmax minvalue (t: Tensors.Tensor<_>) =
+        let dims = t.Dimensions.ToArray()
+        if dims.Length > 1 then failwith "Tensor must be 1D"
+        let d = dims[0]
+        let mutable topIndex = 0
+        let mutable topScore = minvalue
+
+        for i in 0..d - 1 do
+            if t[i] > topScore then 
+                topScore <- t[i]
+                topIndex <- i    
+        topIndex, topScore  
+    
+    let argmaxf32 d = argmax Single.MinValue d 
+ 
     
     let toJaggedArray2D (t : Tensors.Tensor<_>) =
         let dims = t.Dimensions.ToArray()
@@ -168,6 +173,7 @@ module Tensor =
             [| for i in 0..w - 1 ->
                 [| for j in 0..h - 1 -> t.[0, 0, i, j] |] |]
         | _ -> failwith "Incompatible dimensions"
+        
         
     let toJaggedArray3D (t : Tensors.Tensor<_>) =
         let dims = t.Dimensions.ToArray()
@@ -196,6 +202,10 @@ module Tensor =
             
         | _ -> failwith "Incompatible dimensions"
 
+    let toVector t = vector (toArray t)
+    
     let toMatrix t = matrix (toJaggedArray2D t)
+
+    let toDenseVector t = DenseVector.ofArray (toArray t)
 
     let toDenseMatrix t = DenseMatrix.ofRowArrays (toJaggedArray2D t)

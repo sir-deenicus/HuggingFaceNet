@@ -11,19 +11,24 @@ type PrependType =
     | Multiple of string []
     | Single of string 
     
-type BatchedTokens<'n> = {
+type Tokenized<'n> = {
     TokenIds : 'n DenseTensor
     AttentionMasks : 'n DenseTensor
 } 
 
+type BatchedTokens<'n> = {
+    Indices : int []
+    TokensAndMasks : Tokenized<'n>
+} 
+
 type ITokenizer<'n> =
-    abstract member Tokenize : string -> 'n Tensor   
+    abstract member RawTokenize : string -> 'n Tensor   
     abstract member Detokenize : 'n Tensor -> string     
-    abstract member BatchTokenize: string[] -> 'n BatchedTokens    
-    abstract member MultiBatchTokenize: string[][] -> int[] * 'n BatchedTokens    
-    abstract member MultiBatchTokenize: string[][] * int -> int[] * 'n BatchedTokens    
-    abstract member MultiBatchTokenize: string[][] * int * string -> int[] * 'n BatchedTokens    
-    abstract member MultiBatchTokenize: string[][] * int * string[] -> int[] * 'n BatchedTokens    
+    abstract member Tokenize: string[] -> 'n Tokenized    
+    abstract member BatchTokenize: string[][] -> 'n BatchedTokens    
+    abstract member BatchTokenize: string[][] * int -> 'n BatchedTokens    
+    abstract member BatchTokenize: string[][] * int * string -> 'n BatchedTokens    
+    abstract member BatchTokenize: string[][] * int * string[] -> 'n BatchedTokens    
     abstract member BatchDetokenize : 'n Tensor -> string []
     
      
@@ -66,17 +71,18 @@ let generalDetokenizer (tokenizerHandle: uint64) (skipSpecialTokens:bool) (ids: 
      
     
 //batch encode strings, add attention masks to all strings
-let inline attentionMaskAndPad (tokens : _ []) =
-    let lens = Array.map Array.length tokens 
-    let maxlen = Array.max lens 
-    [|
-        for i in 0..tokens.Length - 1 do
-            [|
-                for j in 0..maxlen - 1 do
-                    if j < lens[i] then yield (tokens[i][j], 1)
-                    else yield (0,0)
-            |] 
-    |] |> Array.map Array.unzip |> Array.unzip
+let inline attentionMaskAndPad (tokens: _ []) =
+    let lens = Array.map Array.length tokens
+    let maxlen = Array.max lens
+
+    [| for i in 0 .. tokens.Length - 1 do
+        [| for j in 0 .. maxlen - 1 do
+            if j < lens[i] then
+                yield (tokens[i][j], 1)
+            else
+                yield (0, 0) |] |]
+    |> Array.map Array.unzip
+    |> Array.unzip    
     
 let tokenize (startToken, stopToken, septoken) prepended tokenizer maxlen i0 (sents: string []) =
     //Actually, I will use a buffer approach.
@@ -115,7 +121,7 @@ let tokenize (startToken, stopToken, septoken) prepended tokenizer maxlen i0 (se
      
 ///Transformers have windows of size = N tokens max. To get around this, rather 
 ///than just truncate we split by sentence and join sentences until they exhaust the window
-///and then start a new window until all windows have been complete. Think of trying to 
+///and then start a new window until all text has been consumed. Think of trying to 
 ///write a tweet thread were all tweets must contain only complete sentences.
 let tokenizeSplit tokenize maxlen (sents : _ []) =
     let rec loop i =
@@ -171,6 +177,8 @@ type GeneralTokenizer(startToken, stopToken, maxlen, ?sepToken) =
    
     let stoptoken = match stopToken with Some stop -> stop | None -> startToken.Value
     
+    ///This method is for handling the case where you have a series of documents which exceed the window size and
+    ///tracking where each split document cames from
     let flattenTokenBatch maxlen start prepends tokenizer (s: _ []) =
         let flattened =
             [| for i in 0 .. s.Length - 1 do
@@ -178,7 +186,8 @@ type GeneralTokenizer(startToken, stopToken, maxlen, ?sepToken) =
                        tokenizeSplit
                            (tokenize
                                (startToken, stoptoken, sepToken)
-                               (Option.map (function
+                               (Option.map
+                                   (function
                                    | PrependType.Multiple ps -> ps[i]
                                    | PrependType.Single p -> p)
                                    prepends)
@@ -187,16 +196,17 @@ type GeneralTokenizer(startToken, stopToken, maxlen, ?sepToken) =
                            s[i]
 
                    for j in 0 .. tokens.Length - 1 do
-                       start + i, tokens[j] 
-            |]
+                       start + i, tokens[j] |]
 
         let lookup, flatids = Array.unzip flattened
         let paddedIds, masks = attentionMaskAndPad flatids
 
-        lookup,
-        { TokenIds = Array2D.toTensor (array2D paddedIds)
-          AttentionMasks = Array2D.toTensor (array2D masks) }
-          
+        { Indices = lookup
+          TokensAndMasks =
+            { TokenIds = Array2D.toTensor (array2D paddedIds)
+              AttentionMasks = Array2D.toTensor (array2D masks) } }   
+              
+              
     member __.SpecialTokens = specialTokens
 
     abstract member Tokenizer : string -> int[]
@@ -206,7 +216,7 @@ type GeneralTokenizer(startToken, stopToken, maxlen, ?sepToken) =
     default __.Detokenize(ids: int [], ?skipSpecialTokens:bool) = 
         failwith "not implemented"
 
-    member t.TokenizeSplit(s: string [], ?prepend) =
+    member t.TokenizeSplitAndPad(s: string [], ?prepend) =
         let tokens =
             tokenizeSplit
                 (tokenize (startToken, stoptoken, sepToken) prepend t.Tokenizer)
@@ -215,7 +225,7 @@ type GeneralTokenizer(startToken, stopToken, maxlen, ?sepToken) =
 
         attentionMaskAndPad tokens
 
-    member t.Tokenize(s: string) =
+    member t.RawTokenize(s: string) =
         match stopToken with 
         | None -> 
             Array.append [|if startToken.IsSome then yield startToken.Value|] (t.Tokenizer s) 
@@ -224,20 +234,20 @@ type GeneralTokenizer(startToken, stopToken, maxlen, ?sepToken) =
             |> appendStartEndTokens (startToken, stoptoken)
         |> Array.toTensor
 
-    member t.BatchTokenize(s: string []) =
-        let tks, masks = t.TokenizeSplit s
+    member t.Tokenize(s: string []) =
+        let tks, masks = t.TokenizeSplitAndPad s
 
         { TokenIds = Array2D.toTensor (array2D tks)
           AttentionMasks = Array2D.toTensor (array2D masks) }
 
-    member t.BatchTokenize(s: string) =
+    member t.Tokenize(s: string) =
         let strs = BlingFireUtils.GetSentences s |> Seq.toArray
-        let tks, masks = t.TokenizeSplit strs
+        let tks, masks = t.TokenizeSplitAndPad strs
 
         { TokenIds = Array2D.toTensor (array2D tks)
           AttentionMasks = Array2D.toTensor (array2D masks) }
 
-    member t.BatchTokenize(s: string [] [], ?startindex, ?prepends) =
+    member t.BatchTokenize(s: string [][], ?startindex, ?prepends) =
         let start = defaultArg startindex 0
 
         flattenTokenBatch
@@ -259,15 +269,15 @@ type GeneralTokenizer(startToken, stopToken, maxlen, ?sepToken) =
         Tensor.toJaggedArray2D ids |> t.BatchDetokenize
 
     interface ITokenizer<int> with
-        member t.Tokenize(s: string) = t.Tokenize s
-        member t.BatchTokenize(s: string []) = t.BatchTokenize s
-        member t.MultiBatchTokenize(s: string [] []) = t.BatchTokenize(s)
-        member t.MultiBatchTokenize(s: string [] [], startindex: int) = t.BatchTokenize(s, startindex)
+        member t.RawTokenize(s: string) = t.RawTokenize s
+        member t.Tokenize(s: string []) = t.Tokenize s
+        member t.BatchTokenize(s: string [][]) = t.BatchTokenize(s)
+        member t.BatchTokenize(s: string [][], startindex: int) = t.BatchTokenize(s, startindex)
 
-        member t.MultiBatchTokenize(s: string [] [], startindex: int, prepends: string []) =
+        member t.BatchTokenize(s: string [][], startindex: int, prepends: string []) =
             t.BatchTokenize(s, prepends, startindex)
 
-        member t.MultiBatchTokenize(s: string [] [], startindex: int, prepend: string) =
+        member t.BatchTokenize(s: string [][], startindex: int, prepend: string) =
             t.BatchTokenize(s, prepend, startindex)
 
         member t.Detokenize(ids: Tensor<int>) = t.Detokenize(Tensor.toArray ids)
