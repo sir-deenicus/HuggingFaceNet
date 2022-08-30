@@ -3,7 +3,7 @@
   <PropertyGroup>
     <TargetFramework>net5.0</TargetFramework>
 	<LangVersion>preview</LangVersion>
-	<Version>0.1.0</Version>
+	<Version>0.1.5</Version>
     <GenerateDocumentationFile>true</GenerateDocumentationFile>
     <WarnOn>3390;$(WarnOn)</WarnOn>
     <Platforms>AnyCPU;x64</Platforms>
@@ -20,6 +20,7 @@
     <None Include="Archive\sampler.fsx" />
     <Compile Include="Tensors.fs" />
     <Compile Include="Tokenizers.fs" />
+    <Compile Include="Sampling.fs" />
     <Compile Include="ONNXnet.fs" />
     <None Include="TestDocSnippets.fsx" />
   </ItemGroup>

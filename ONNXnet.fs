@@ -4,104 +4,8 @@ open System.Collections.Generic
 open Microsoft.ML.OnnxRuntime
 open System
 open TensorNet.Tokenizers
-open TensorExtensions
-   
-type SamplerOutput = {
-    Tokens : int []
-    Probabilities : float32 [] 
-} 
-
-type SamplerInfo = {
-    StartToken : int 
-    SentenceEndTokens : int []
-    BlockStartTokenIndex : int 
-    MinSentLen : int
-}
-
-type SamplerState = {
-    SentenceLen : int 
-    RepeatCount : int
-}
-
-module Array =  
-    let inline normalize (l: (_ * float32) []) =
-        let tot = Array.sumBy snd l
-        Array.Parallel.map (fun (x, w) -> x, w / tot) l
-
-module Sampling =
-    let random = System.Random()
-
-    let getLargeProbItems maxp (ps: _ []) =
-        let ps' = Array.sortByDescending snd ps
-        let top = ResizeArray(ps.Length)
-        let mutable cumulativeprob = 0.f
-        let mutable k = 0
-        let mutable notdone = true
-
-        while k < ps.Length && notdone do
-            let i, p = ps'.[k]
-            cumulativeprob <- cumulativeprob + p
-            top.Add(i, p)
-
-            if cumulativeprob + p > maxp then
-                notdone <- false
-
-            k <- k + 1
-
-        top.ToArray()
-
-    let discreteSampleIndex (prob: _ []) =
-        let cummulativeDistr = Array.create prob.Length (snd prob.[0])
-
-        for i in 1 .. prob.Length - 1 do
-            cummulativeDistr.[i] <- cummulativeDistr.[i - 1] + (snd prob.[i])
-
-        let k =
-            float32 (random.NextDouble())
-            * cummulativeDistr.[^0]
-
-        let rec cummProb index =
-            if k > cummulativeDistr.[index] then
-                cummProb (index + 1)
-            else
-                index
-
-        cummProb 0
-
-    let argmax samplingInfo samplerState (logits: _ []) =
-        if samplerState.RepeatCount >= samplingInfo.BlockStartTokenIndex then
-            logits.[samplingInfo.StartToken] <- -infinityf
-
-        //suppress end of sentence tokens while < minsentlen
-        if samplerState.SentenceLen < samplingInfo.MinSentLen then
-            samplingInfo.SentenceEndTokens
-            |> Array.iter (fun token -> logits.[token] <- -infinityf)
-
-        Array.argmaxf32 logits
-
-
-    let sample k p samplingInfo samplerState (logits: float32 []) = 
-        if samplerState.RepeatCount >= samplingInfo.BlockStartTokenIndex then
-            logits.[samplingInfo.StartToken] <- -infinityf
-
-        //suppress end of sentence tokens while < minsentlen
-        if samplerState.SentenceLen < samplingInfo.MinSentLen then
-            samplingInfo.SentenceEndTokens
-            |> Array.iter (fun token -> logits.[token] <- -infinityf)
-
-        let probs =
-            [| for i in 0 .. logits.Length - 1 -> i, exp (float32 logits.[i]) |]
-            |> Array.normalize
-
-        let choices = getLargeProbItems p probs
-
-        let i =
-            if k > 0 then
-                choices |> Array.take k |> discreteSampleIndex
-            else
-                discreteSampleIndex choices
-
-        i, snd probs.[i] 
+open TensorExtensions 
+open Sampling
         
 [<RequireQualifiedAccess>]
 module ONNX =
@@ -253,18 +157,16 @@ module ONNX =
         
         let blockStartTokenIndex = defaultArg blockStartTokenIndex 3
         
-        let sentenceEndTokens = defaultArg sentenceEndTokens [||]
-        
-        let sentenceEndTokensSet = HashSet sentenceEndTokens
+        let sentenceEndTokens = HashSet(defaultArg sentenceEndTokens [||])
          
         //fail countsents is true and sentendtoks is empty
-        do if countsents && sentenceEndTokens.Length = 0 then failwith "countBySentences is true but sentenceEndTokens is empty" 
+        do if countsents && sentenceEndTokens.Count = 0 then failwith "countBySentences is true but sentenceEndTokens is empty" 
          
         let repeatmem = ResizeArray()  
         
         let samplerinfo = {
             StartToken = startToken
-            SentenceEndTokens = sentenceEndTokens
+            StopToken = stopToken
             BlockStartTokenIndex = blockStartTokenIndex
             MinSentLen = minsentlen 
         }     
@@ -289,8 +191,8 @@ module ONNX =
                            if encoderStates.IsSome then yield encoderStates.Value |]
                     ) 
 
-                let index, p = samplerfn samplerinfo {RepeatCount = repeatmem.Count; SentenceLen = generatedTokens.Count} logits[0].[0, ^0, *] 
-
+                let index, p = samplerfn samplerinfo {SampleLen = c} logits[0].[0, ^0, *] 
+                
                 repeatmem.Add index
 
                 if repeatmem.Count > 5 then repeatmem.RemoveAt 0  
@@ -304,7 +206,7 @@ module ONNX =
                 decoder.GC()
                 
                 if countsents then 
-                    if sentenceEndTokensSet.Contains index then c <- c + 1
+                    if sentenceEndTokens.Contains index then c <- c + 1
                 else c <- c + 1
                 
                 if repeatmem.Count >= 5 && HashSet(repeatmem).Count = 1 then stop <- true
