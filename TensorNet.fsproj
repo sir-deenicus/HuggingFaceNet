@@ -3,7 +3,7 @@
   <PropertyGroup>
     <TargetFramework>net5.0</TargetFramework>
 	<LangVersion>preview</LangVersion>
-	<Version>0.1.5</Version>
+	<Version>0.1.6</Version>
     <GenerateDocumentationFile>true</GenerateDocumentationFile>
     <WarnOn>3390;$(WarnOn)</WarnOn>
     <Platforms>AnyCPU;x64</Platforms>
@@ -11,6 +11,7 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <None Include="lab\hash-tests.fsx" />
     <None Include="lab\tokenizer-tests.fsx" />
     <None Include="lab\semantic-search.fsx" />
     <None Include="Archive\tensor-extensions.fsx" />
@@ -18,18 +19,25 @@
     <None Include="Archive\roberta-lab.fsx" />
     <None Include="Archive\tokenizers.fsx" />
     <None Include="Archive\sampler.fsx" />
+    <Compile Include="Files.fs" />
     <Compile Include="Tensors.fs" />
     <Compile Include="Tokenizers.fs" />
     <Compile Include="Sampling.fs" />
     <Compile Include="ONNXnet.fs" />
+    <Compile Include="SentenceVectors.fs" />
+    <Compile Include="NLP.fs" />
     <None Include="TestDocSnippets.fsx" />
   </ItemGroup>
 
   <ItemGroup>
     <PackageReference Include="BlingFire" Version="1.0.1" />
+    <PackageReference Include="FsPickler" Version="5.3.2" />
+    <PackageReference Include="K4os.Hash.xxHash" Version="1.0.8" />
     <PackageReference Include="MathNet.Numerics.FSharp" Version="5.0.0" />
     <PackageReference Include="MathNet.Numerics.MKL.Win-x64" Version="3.0.0" />
-    <PackageReference Include="Microsoft.ML.OnnxRuntime.Managed" Version="1.11.0" />
+    <PackageReference Include="MathNet.Numerics.Providers.MKL" Version="5.0.0" />
+    <PackageReference Include="Microsoft.ML.OnnxRuntime.Managed" Version="1.13.1" />
+    <PackageReference Include="Newtonsoft.Json" Version="13.0.1" />
     <PackageReference Include="SentencePieceDotNET" Version="1.0.1" />
   </ItemGroup>
 

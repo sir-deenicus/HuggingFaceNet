@@ -31,7 +31,7 @@ module Array =
 module Sampling =
     let random = System.Random()
 
-    let getTotProb maxp (ps: _ []) = 
+    let getTopProbs maxp (ps: _ []) = 
         let top = ResizeArray(ps.Length)
         let mutable cumulativeprob = 0.f
         let mutable k = 0
@@ -51,7 +51,7 @@ module Sampling =
 
     let getLargeProbItems maxp (ps: _ []) =
         let ps' = Array.sortByDescending snd ps
-        getTotProb maxp ps'
+        getTopProbs maxp ps'
 
     let discreteSampleIndex (prob: _ []) =
         let cummulativeDistr = Array.create prob.Length (snd prob.[0])
@@ -98,12 +98,11 @@ module Sampling =
 
         let i =
             if k > 0 then
-                choices |> Array.take k |> discreteSampleIndex
+                choices |> Array.takeOrMax k |> discreteSampleIndex
             else
                 discreteSampleIndex choices
 
-        i, snd probs.[i] 
-
+        choices[i]
 
     let sampleTypical k p samplingInfo samplerState (logits: float32 []) = 
         if samplerState.SampleLen >= samplingInfo.BlockStartTokenIndex then
@@ -117,14 +116,23 @@ module Sampling =
             [| for i in 0 .. logits.Length - 1 -> i, exp (float32 logits.[i]) |]
             |> Array.normalize
 
-        let ent = -1f * (Array.sumBy (fun (_, p) -> p * log p) probs)
+        //what does the above line of code do?
+        //Answer: it normalizes the probabilities so that they sum to 1
+
+        let ent = -1f * (Array.sumBy (fun (_, p) -> p * log (p + 1e-30f)) probs)
+        //what does the above line of code do?
+        //Answer: it calculates the entropy of the probabilities
         
         let sorted = probs |> Array.sortBy (fun (_, p) -> abs (-log p - ent))  
-        
+        //what does the above line of code do?
+        //Answer: it sorts the probabilities by the absolute value of the difference between the log of the probability and the entropy of the probabilities (i.e. it sorts the probabilities by how different they are from the average probability)
+     
         let choices = 
-            if k = 0 then getTotProb p sorted 
-            else sorted |> Array.takeOrMax k |> getTotProb p
+            if k = 0 then getTopProbs p sorted 
+            else sorted |> Array.takeOrMax k |> getTopProbs p
 
         let i = discreteSampleIndex choices
 
-        i, snd probs.[i] 
+        choices[i]
+
+        

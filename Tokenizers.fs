@@ -4,7 +4,7 @@ open Microsoft.ML.OnnxRuntime.Tensors
 open System
 open BlingFire
 open TensorExtensions 
-open System.Collections.Generic
+open System.Collections.Generic 
 
 [<RequireQualifiedAccess>]
 type PrependType =
@@ -16,46 +16,29 @@ type Tokenized<'n> = {
     AttentionMasks : 'n DenseTensor
 } 
 
+type DocLoc = {GlobalLoc : int; InnerLoc : int}
+
 type BatchedTokens<'n> = {
-    Indices : int []
+    Indices : DocLoc  []
     TokensAndMasks : Tokenized<'n>
 } 
-
-type ITokenizer<'n> =
-    abstract member RawTokenize : string -> int []
-    abstract member Detokenize : 'n Tensor -> string     
-    abstract member Tokenize: string[] -> 'n Tokenized     
-    abstract member BatchTokenize: string[][] * int * string[] -> 'n BatchedTokens    
-    abstract member BatchDetokenize : 'n Tensor -> string []
     
-
-module BlingFireUtils = 
-    let splitSentence (str:string) =  
-        let sents = BlingFireUtils.GetSentences str |> Seq.toArray 
-        //I'm not sure why blingfire adds a weird token to the last sentence
-        sents.[^0] <- sents.[^0].[..^1]
-        sents 
-        
-        
 let initBlingFire(libloc) = Runtime.InteropServices.NativeLibrary.Load(libloc)
      
-let splitSentence (s:string) = 
+let splitBySentences (s:string) = 
     let sents = BlingFire.BlingFireUtils.GetSentences s |> Seq.toArray
     if int (sents[^0][^0]) = 0 then  
         sents[^0] <- sents[^0][..^1]
         sents 
     else sents
-    
-let splitForBatch (s:string) =
-    splitSentence s 
-    |> Array.map (fun a -> [|a|])  
-
-let splitToDocumentBatch (s:string[]) =
-    s |> Array.map splitSentence
-    
-let liftToBatch (s:string[]) =
-    Array.map (fun a -> [|a|]) s  
-    
+     
+ 
+let tryFlattenBatch(xs : _ [][]) =
+    let lens = Array.sumBy Array.length xs
+    if lens <= xs.Length then 
+        Some [|for x in xs do if x.Length > 0 then yield x[0]|]
+    else None
+   
 let generalTokenizer (tokenizerHandle: uint64) (unkId:int) (s: string) =
     let inBytes = Text.Encoding.UTF8.GetBytes(s)
      
@@ -87,8 +70,8 @@ let inline attentionMaskAndPad (tokens: _ []) =
             else
                 yield (0, 0) |] |]
     |> Array.map Array.unzip
-    |> Array.unzip    
-    
+    |> Array.unzip  
+       
 let tokenize (startToken, stopToken, septoken) prepended tokenizer maxlen i0 (sents: string []) =
     //Actually, I will use a buffer approach.
     //Recursive for early exit.
@@ -101,8 +84,8 @@ let tokenize (startToken, stopToken, septoken) prepended tokenizer maxlen i0 (se
                 buffer.[0] <- startToken; 1
         match prepended with 
         | None -> tokenlen 
-        | Some txt -> 
-            let prependedTokens : int [] = tokenizer txt
+        | Some prependedtxt -> 
+            let prependedTokens : int [] = tokenizer prependedtxt
             Array.Copy(prependedTokens, 0, buffer, tokenlen, prependedTokens.Length)
             match septoken with 
             | None -> tokenlen + prependedTokens.Length + 1
@@ -131,12 +114,55 @@ let tokenize (startToken, stopToken, septoken) prepended tokenizer maxlen i0 (se
 let tokenizeSplit tokenize maxlen (sents : _ []) =
     let rec loop i =
         [| if i < sents.Length then 
-            let (s : int []), j = tokenize maxlen i sents  
-            if s.Length > 2 || (s.Length = 2 && s.[1] = 1) then yield s //T5 can have len = 2, hard code this
+            let (tks : int []), j = tokenize maxlen i sents  
+            if tks.Length > 2 || (tks.Length = 2 && tks.[1] = 1) then yield tks //T5 can have len = 2, hard code this
             // if i = j and there're more sents left then a sentence was probably too long. We can either fail or skip. Given token window lens are > 300 to 600 words, I will choose to skip.
             let j' =
                 if i = j then j + 1
                 else j
+            yield! loop j' |]
+    loop 0 
+     
+     
+let splitToTokenizerWindow (startToken, septoken) prepended tokenizer maxlen (sents : _ []) =
+    //Code uses tokenizer for dummy runs to split text. Easier to just repeat code. Also cheaper than doing both at once.
+    let tokenizeSentenceSize maxlen i0 (sents: string []) =
+        let tokenlenInit = 
+            let tokenlen =
+                match startToken with 
+                | None -> 0 
+                | Some startToken -> 1
+            match prepended with 
+            | None -> tokenlen 
+            | Some txt -> 
+                let prependedTokens : int [] = tokenizer txt
+                match septoken with 
+                | None -> tokenlen + prependedTokens.Length + 1
+                | Some _ -> tokenlen + prependedTokens.Length + 2 //1 + 1
+
+        let section = ResizeArray()
+        let rec loop i tokenlen =
+            let sent = sents.[i]
+            let tokenized = tokenizer sent
+            let tokenlen' = tokenlen + tokenized.Length
+
+            if tokenlen' + 1 < maxlen then // account for stop tag
+                if i + 1 < sents.Length then   
+                    section.Add(sent)
+                    loop (i + 1) tokenlen'
+                else 
+                    section.Add(sent)
+                    i + 1
+            else i
+
+        let i = loop i0 tokenlenInit
+        String.concat " " section, i
+        
+    let rec loop i =
+        [| if i < sents.Length then 
+            let (tks : string), j = tokenizeSentenceSize maxlen i sents  
+            if tks.Length > 0 then yield tks 
+            let j' = if i = j then j + 1 else j
             yield! loop j' |]
     loop 0
  
@@ -153,7 +179,7 @@ module BPE =
         List.map byte ([ '!' .. '~' ] @ [ '¡' .. '¬' ] @ [ '®' .. 'ÿ' ])
         |> HashSet
 
-    let mutable n = 0
+    let mutable internal n = 0
 
     let internal chars =
         [| yield! Seq.map char bytes
@@ -184,9 +210,9 @@ type GeneralTokenizer(startToken, stopToken, maxlen, ?sepToken, ?endOfSentenceTo
     
     ///This method is for handling the case where you have a series of documents which exceed the window size and
     ///tracking where each split document cames from
-    let flattenTokenBatch maxlen start prepends tokenizer (s: _ []) =
+    let flattenTokenBatch maxlen start prepends tokenizer (strs: _ []) =
         let flattened =
-            [| for i in 0 .. s.Length - 1 do
+            [| for i in 0 .. strs.Length - 1 do
                    let tokens =
                        tokenizeSplit
                            (tokenize
@@ -198,10 +224,10 @@ type GeneralTokenizer(startToken, stopToken, maxlen, ?sepToken, ?endOfSentenceTo
                                    prepends)
                                tokenizer)
                            maxlen
-                           s[i]
+                           strs[i]
 
                    for j in 0 .. tokens.Length - 1 do
-                       start + i, tokens[j] |]
+                       {GlobalLoc = start + i; InnerLoc = j}, tokens[j] |]
 
         let lookup, flatids = Array.unzip flattened
         let paddedIds, masks = attentionMaskAndPad flatids
@@ -215,6 +241,10 @@ type GeneralTokenizer(startToken, stopToken, maxlen, ?sepToken, ?endOfSentenceTo
     member __.SpecialTokens = specialTokens
 
     member __.EndOfSentenceTokens = endOfSentenceTokens
+
+    member __.StartToken = startToken
+    
+    member __.StopToken = stoptoken
 
     abstract member Tokenizer : string -> int[]
     default __.Tokenizer s = failwith "not implemented"
@@ -231,6 +261,8 @@ type GeneralTokenizer(startToken, stopToken, maxlen, ?sepToken, ?endOfSentenceTo
                 s
 
         attentionMaskAndPad tokens
+
+    member __.MaxContextWindowLen = maxlen 
 
     member t.RawTokenize(s: string) =
         match stopToken with 
@@ -252,6 +284,14 @@ type GeneralTokenizer(startToken, stopToken, maxlen, ?sepToken, ?endOfSentenceTo
             Result.Ok(res.[..maxlen - 1])
         else
             Result.Error res        
+    
+    member t.SplitToTokenizerWindow(prepend:string, str: string) =    
+        let sents = splitBySentences str 
+        splitToTokenizerWindow (startToken, sepToken) (Some prepend) t.Tokenizer maxlen sents
+
+    member t.SplitToTokenizerWindow(str: string) =    
+        let sents = splitBySentences str 
+        splitToTokenizerWindow (startToken, sepToken) None t.Tokenizer maxlen sents
         
     member t.Tokenize(s: string seq, ?prepend) =
         let tks, masks = t.TokenizeSplitAndPad (Seq.toArray s, ?prepend = prepend)
@@ -260,7 +300,7 @@ type GeneralTokenizer(startToken, stopToken, maxlen, ?sepToken, ?endOfSentenceTo
           AttentionMasks = Array2D.toTensor (array2D masks) }
 
     member t.Tokenize(s: string, ?prepend) =
-        let strs = BlingFireUtils.splitSentence s |> Seq.toArray
+        let strs = splitBySentences s |> Seq.toArray
         let tks, masks = t.TokenizeSplitAndPad (strs, ?prepend = prepend)
 
         { TokenIds = Array2D.toTensor (array2D tks)
@@ -277,17 +317,17 @@ type GeneralTokenizer(startToken, stopToken, maxlen, ?sepToken, ?endOfSentenceTo
             s
 
     member t.BatchTokenize(strs: string seq, ?startindex: int) =
-        let strs = strs |> Seq.toArray |> Array.map (BlingFireUtils.splitSentence >> Seq.toArray)
+        let strs = strs |> Seq.toArray |> Array.map splitBySentences 
         
         t.BatchTokenize(strs, ?startindex = startindex)
         
     member t.BatchTokenize(prepends: string seq, strs: string seq, ?startindex: int) =
-        let strs = strs |> Seq.toArray |> Array.map (BlingFireUtils.splitSentence >> Seq.toArray)
+        let strs = strs |> Seq.toArray |> Array.map splitBySentences
         
         t.BatchTokenize(strs, ?startindex = startindex, ?prepends = Some(PrependType.Multiple (Seq.toArray prepends)))
         
     member t.BatchTokenize(prepend: string, strs: string seq, ?startindex: int) =
-        let strs = strs |> Seq.toArray |> Array.map (BlingFireUtils.splitSentence >> Seq.toArray)
+        let strs = strs |> Seq.toArray |> Array.map splitBySentences
         t.BatchTokenize(strs, ?startindex = startindex, ?prepends = Some(PrependType.Single prepend))
         
     member t.BatchTokenize(s: string [] [], prepends: string [], ?startindex: int) =
@@ -300,15 +340,7 @@ type GeneralTokenizer(startToken, stopToken, maxlen, ?sepToken, ?endOfSentenceTo
 
     member t.BatchDetokenize(ids: Tensor<int>) =
         Tensor.toJaggedArray2D ids |> t.BatchDetokenize
-
-    interface ITokenizer<int> with
-        member t.RawTokenize(s: string) = t.RawTokenize s
-        member t.Tokenize(s: string []) = t.Tokenize s 
-        member t.BatchTokenize(s: string [][], startindex: int, prepends: string []) =
-            t.BatchTokenize(s, prepends, startindex) 
-
-        member t.Detokenize(ids: Tensor<int>) = t.Detokenize(Tensor.toArray ids)
-        member t.BatchDetokenize(ids: Tensor<int>) = t.BatchDetokenize ids          
+        
 
          
 type BlingFireTokenizer(loc, startToken, stopToken, maxlen, unknownId, ?detokenizer, ?sepToken, ?endOfSentenceTokens) =
@@ -370,7 +402,8 @@ type SentencePieceTokenizer(loc, startToken, stopToken, maxlen, ?sepToken, ?endO
     static member NewDebertaTokenizer(loc) =
         new SentencePieceTokenizer(loc, Some 1, Some 2, 512)
           
-        
+module PadTokens =
+    let T5 = 0        
 
     
 
