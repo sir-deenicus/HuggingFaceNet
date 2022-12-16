@@ -1,4 +1,5 @@
-﻿#I @"C:\Users\cybernetic\.nuget\packages\"
+﻿ 
+#I @"C:\Users\cybernetic\.nuget\packages\"
 #I @"D:\Downloads\NeuralNets\onnx1.13"
 #I @"C:\Users\cybernetic\source\repos\"
 #r @"BlingFire\bin\Release\net5.0\BlingFire.dll"
@@ -23,10 +24,10 @@ open MathNet.Numerics.LinearAlgebra
 open MathNet.Numerics.LinearAlgebra.MatrixExtensions
 open Newtonsoft.Json
 open TensorNet.Tokenizers
+open TensorNet.NLP
 
 let model =
     new ONNX.NNet<float32>(@"D:\Downloads\NeuralNets\deberta-v3-nli-base\deberta-v3-nli-base.onnx")
-    
     
 let model =
     new ONNX.NNet<float32>(@"D:\Downloads\NeuralNets\all-MiniLM-L6-v2\all-MiniLM-L6-v2.onnx")
@@ -36,111 +37,191 @@ let model2 =
 
 let model3 =
     new ONNX.NNet<float32>(@"D:\Downloads\NeuralNets\all-MiniLM-L6-v2\all-MiniLM-L6-v2-quantized.onnx")
+
 let db = Tokenizers.SentencePieceTokenizer.NewDebertaTokenizer(@"D:\Downloads\NeuralNets\deberta-v3-nli-base\spm.model")
 
-    
 Tokenizers.initBlingFire @"D:\Downloads\NeuralNets\blingfire\blingfiretokdll.dll"
-
-
-let flant5smallEncoder = new ONNX.NNet<float32>(@"D:\Downloads\NeuralNets\flan-t5-small\flan-t5-small-encoder.onnx")
-let flant5smallDecoder = new ONNX.NNet<float32>(@"D:\Downloads\NeuralNets\flan-t5-small\flan-t5-small-decoder.onnx")
-
+ 
 let flant5tokenizer = Tokenizers.SentencePieceTokenizer.NewT5Tokenizer(@"D:\Downloads\NeuralNets\flan-t5-small\spiece.model")
-
-let flant5small = new ONNX.EncoderDecoderSampler(flant5smallEncoder, flant5smallDecoder, PadTokens.T5, flant5tokenizer.StopToken, sentenceEndTokens = flant5tokenizer.EndOfSentenceTokens.Value)
-
-    
+ 
 let q = "Language models (LMs) are trained on collections of documents, written by individual human agents to achieve specific goals in an outside world. During training, LMs have access only to text of these documents, with no direct evidence of the internal states of the agents that produced them -- a fact often used to argue that LMs are incapable of modeling goal-directed aspects of human language production and comprehension. Can LMs trained on text learn anything at all about the relationship between language and use? I argue that LMs are models of intentional communication in a specific, narrow sense."
-let instr = "Definition: In this task, you are given the abstract of a research paper. Your task is to describe the key question being studied. Input: " + q + ". Output: "//"Definition: Create a bullet point list of the 4 main ideas covered in the text . Input: " + q + " Output: "
 let q = """Machine learning systems perform well on pattern matching tasks, but their ability to perform algorithmic or logical reasoning is not well understood. One important reasoning capability is algorithmic extrapolation, in which models trained only on small/simple reasoning problems can synthesize complex strategies for large/complex problems at test time. Algorithmic extrapolation can be achieved through recurrent systems, which can be iterated many times to solve difficult reasoning problems. We observe that this approach fails to scale to highly complex problems because behavior degenerates when many iterations are applied -- an issue we refer to as "overthinking." We propose a recall architecture that keeps an explicit copy of the problem instance in memory so that it cannot be forgotten. We also employ a progressive training routine that prevents the model from learning behaviors that are specific to iteration number and instead pushes it to learn behaviors that can be repeated indefinitely. These innovations prevent the overthinking problem, and enable recurrent systems to solve extremely hard extrapolation tasks."""
+let instr = "Definition: In this task, you are given the abstract of a research paper. Your task is to describe the key question being studied. Input: " + q + ". Output: "//"Definition: Create a bullet point list of the 4 main ideas covered in the text . Input: " + q + " Output: "
 let instr = "Definition: In this task, you must identify and list all of the key concepts of the text. The concepts must consist of more than one word. For example 'machine learning' is correct and 'machine','learning' is wrong. Input: " + q + ". Output: "
-let instr = "Definition: In this task, you must identify and list all of the subjects of the text. Input: " + q + ". Output: " // *
 let instr = "Definition: In this task, you must identify and list all of the concepts of the text. Input: " + q + ". Output: "
 
-
+let instr = "Definition: In this task, In this task you will be given a question to answer. Keep the answer short. Use the provided context to answer. Context: " + q + ". Question: How does algorithmic extrapolation work? Answer: " // *
+let instr = "Definition: In this task, you must identify and list all of the subjects of the text. Input: " + q + ". Output: " // *
 let instr = "Definition: For this task two steps are to be performed. Summarize the given text into a title that captures the main concept in the text. The title should be long. Input: " + q + ". Output: "
+  
  
-let r1 = flant5tokenizer.RawTokenize("Definition: Write a five line poem about going to the shop. Poem: ")//q + ". In summary: ") //
-r1.Length
+let flant5base = new EncoderDecoder(@"D:\Downloads\NeuralNets\flan-t5-xl\encoder\flan-t5-xl-encoder.onnx", flant5tokenizer, isQuantized = false)
 
-let sample k p samplingInfo samplerState (logits: float32 []) = 
-    if samplerState.SampleLen >= samplingInfo.BlockStartTokenIndex then
-        logits.[samplingInfo.StartToken] <- -infinityf
+let flant5xl = new EncoderDecoder(@"D:\Downloads\NeuralNets\flan-t5-xl\encoder\flan-t5-xl-encoder.onnx", @"D:\Downloads\NeuralNets\flan-t5-xl\decoder\flan-t5-xl-decoder.onnx", flant5tokenizer)
 
-    //suppress end of sentence tokens while < minsentlen
-    if samplerState.SampleLen < samplingInfo.MinSentLen then
-        logits.[samplingInfo.StopToken] <- -infinityf
+flant5base.Run("A word for when you're feeling discouraged by all the cool stuff everyone else is doing is ", sampler = Sampling.sample 0 0.7f)
 
-    let probs =
-        [| for i in 0 .. logits.Length - 1 -> i, exp (float32 logits.[i]) |]
-        |> Array.normalize
+flant5xl.Run(
+    definition =
+        "In this task you will be given a question to answer. Keep the answer short. Use the provided context to answer.",
+        //"In this task, you must identify and list all of the subjects of the text",
+        //"Definition: In this task, you are given the abstract of a research paper. Your task is to describe the key question being studied.",
+    context = q,
+    contextname = "Context",
+    question = "What does algorithmic extrapolation do?", //what is, what are the properties of, what does X do
+    sampler = Sampling.sample 0 0.1f
+    //maxlen = 20
+)
+//q + ". In summary: "
 
-    let choices = Sampling.getLargeProbItems p probs 
-    printfn "%A" (choices.[..9])
-    let i =
-        if k > 0 then
-            choices |> Array.take k |> Sampling.discreteSampleIndex
-        else
-            Sampling.discreteSampleIndex choices
+let currenttokens = ResizeArray()
+//continually add to current toks. we detokenize and print them. But we only want to
+//to print the new section of the string
+let mutable currentstring = ""
+let h =
+    flant5xl.EncoderDecoderModel.TokenEvent.Subscribe (fun t ->
+        currenttokens.Add(t)
+        let newstring = flant5tokenizer.Detokenize(currenttokens.ToArray())
+
+        let diff =
+            if newstring = "" || currentstring = "" then ""
+            else newstring.Replace(currentstring, "")
+
+        currentstring <- newstring
+        printf $"{diff}")
+
+h.Dispose()
+
+let strr = "i sit at the store a few aisles away i sit and try to concentrate and sometimes it take me a while i do n't have the sense of when to leave and sometimes i dont want to be there at all i get there a little late and find no groceries so i keep pacing i realize that there are plenty of items that i could eat at the store"
+let strr2a = "i sit at the store a few aisles away, "
+let strr2b = "i sit and try to concentrate and sometimes it take me a while"//, i do n't have the sense of when to leave, and sometimes i don't want to be there at all. i get there a little late and find no groceries, so i keep pacing. i realize that there are plenty of items that i could eat at the store."
+flant5xl.Run("Write a 4 line poem about going to the grocery store", sampler = Sampling.sampleTypical 0 0.5f)
+flant5xl.Run("Definition: Given a long string, insert punctuation where it belongs. Input: " + strr)
+
+flant5xl.Run(
+    //$"Definition: rewrite the sentence so its final word is 'flay'. Input: {strr2b}. Output: "
+    $"Definition: reverse the word order of the given sentence but start with the word 'flay'. Input: {strr2b}. Output: "
+    , sampler = Sampling.sampleTypical 0 0.5f)
+
+//let's write a type that wraps the encoder and decoder. it will take a tokenizer
+//and path to the encoder and decoder models. We should have a constructor that takes just 
+//the a path and we assume a pattern of file names for the encoder and decoder models
  
-    choices.[i]    
-
-let sampleTypical k p samplingInfo samplerState (logits: float32 []) = 
-    if samplerState.SampleLen >= samplingInfo.BlockStartTokenIndex then
-        logits.[samplingInfo.StartToken] <- -infinityf
-
-    //suppress end of sentence tokens while < minsentlen
-    if samplerState.SampleLen < samplingInfo.MinSentLen then
-        logits.[samplingInfo.StopToken] <- -infinityf
-
-    let probs =
-        [| for i in 0 .. logits.Length - 1 -> i, exp (float32 logits.[i]) |]
-        |> Array.normalize
-
-    //what does the above line of code do?
-    //Answer: it normalizes the probabilities so that they sum to 1
-
-    let ent = -1f * (Array.sumBy (fun (_, p) -> p * log (p + 1e-30f)) probs)
-    //what does the above line of code do?
-    //Answer: it calculates the entropy of the probabilities
-        
-    let sorted = probs |> Array.sortBy (fun (_, p) -> abs (-log p - ent))  
-    //printfn "%A" sm
-    //what does the above line of code do?
-    //Answer: it sorts the probabilities by the absolute value of the difference between the log of the probability and the entropy of the probabilities (i.e. it sorts the probabilities by how different they are from the average probability)
-     
-    let choices = 
-        if k = 0 then Sampling.getTopProbs p sorted 
-        else sorted |> Array.takeOrMax k |> Sampling.getTopProbs p
-    printfn "%A" (choices)
-    let i = Sampling.discreteSampleIndex choices
-
-    choices[i]
-
-        
-let res = flant5small.Run(r1, countBySentences = false, minlen = 0, sampler = sampleTypical 0 0.1f)
 res.Tokens.Length
-flant5tokenizer.Detokenize(res.Tokens)
+seq {
+    for i in 0..1 ->  
+        let res = 
+            flant5small.Run(t0, countBySentences = false, minlen = 0, sampler = Sampling.sample 0 0.5f)
+       
+        flant5tokenizer.Detokenize(res.Tokens), res.Probabilities |> Array.reduce (*)
+}
+|> Seq.groupBy fst
+//we want just the key and one probability
+|> Seq.map (fun (k, v) -> k, v |> Seq.map snd |> Seq.head)
+|> Seq.toArray
+|> Array.normalize
+|> Seq.take 5
+|> Seq.normalizeWeights 
 
-let r1 = flant5tokenizer.Tokenize("Definition: Write a five line poem about going to the shop. Poem: ")
+|> Seq.map (keepLeft float32) |> Seq.normalizeWeights 
+  
 
-flant5small.RunEncoder(r1) //([|0; 5879|])
+#r @"Hansei\Hansei.Continuation\bin\Release\netstandard2.1\Hansei.Core.dll"
+#r @"Hansei\Hansei\bin\Release\net50\hansei.dll"
+#r "nuget: FSharpx.Collections, 3.1.0"
 
-flant5small.RunDecoderStep([|0|])
+open Hansei.Core.List 
+open Distributions
+open Hansei.Utils
 
-//make it int65
-let r = db.RawTokenize ("hello, this is a test")
-//ATTENTION MASK of just 1s for r
-let attn = r |> Array.map (fun _ -> 1L)
-//zip r and attn with input keys
+open FSharpx.Collections
+
+let rec buildstring maxlen constraints (model: EncoderDecoder) (avoidWords: seq<string>) currentTokens =
+    dist {
+        let input = List.rev currentTokens |> Array.ofList
+        let! t = distributionOfSeq (model.RunDecoderStep input)
+
+        if t = flant5tokenizer.StopToken then
+            let currentstring = flant5tokenizer.Detokenize input
+            let parts = currentstring.Split(' ')
+            printf "%A " currentstring
+            //let's change it up so we can pass in a set of words that we don't want to see
+            //so we will check the current word doesn't contain any of the words in the set
+            do!
+                observe (
+                    (true || parts.Length = (Array.removeDuplicates parts |> Array.length))
+                    && (avoidWords
+                        |> Seq.forall (currentstring.Contains >> not)) && (constraints currentstring)) 
+            return currentstring
+        else
+            let currentTokens = t :: currentTokens
+            printf "%A " t
+            do! observe (currentTokens.Length <= maxlen ) 
+            let currentstring = flant5tokenizer.Detokenize input
+            let parts = currentstring.Split(' ')
+            let check = parts.Length = 0 ||  parts |> Array.exists (fun s -> s.Contains("psy"))
+            //check if any of parts--a string array--contains the word psy
+            //do! observe check
+            
+            return! buildstring maxlen constraints model avoidWords currentTokens
+    } 
+//Definition: Write a short sentence that ends in either the word way, play, stay or flay. That word should appear only as the final, last word. Nowhere else. Ensure that the sentence makes sense as a follow up to "i sit at the store a few aisles away, " and is grammatically correct.
+//Examples: I will not go that way. | We go to play. | It is here that I shall stay  
+//Sentence:  
+
+//final word is = flay 
+let isflay (s: string) = 
+    //actually let's split on space and .,;:!? without keeping it.
+    //remove empty entries
+    let splitchars = [| ' '; '.'; ','; ':'; ';'; '!' |]
+    let penultimate = s.Split(splitchars, StringSplitOptions.RemoveEmptyEntries).[^1]
+    let last = s.Split(splitchars, StringSplitOptions.RemoveEmptyEntries).[^0]
+    printf $"{penultimate} {last} " 
+    // penultimate = "way" || penultimate = "play" || penultimate = "stay" || penultimate = "flay"
+    not (s.Contains("aisle"))
+    && (last = "way"
+        || last = "play"
+        || last = "stay"
+        || last = "flay")
 
 
-//how do I remove a key from a python dictionary?
-//Answer: del dict[key]
+flant5xl.RunEncoder($"""Question: What is the belief propagation algorithm? Answer: """)
+
+let mutable pmodel = buildstring 30 (konst true) flant5xl [] [0]
+
+Model.RejectionSample(pmodel, 20, subsample = ProbabilitySpace.typicalSamples 60 0.7)
+//|> normalize
+|> ProbabilitySpace.map id
+|> List.sortByDescending snd  
+
+pmodel <- []//LazyList.empty
+flant5xl.EncoderDecoderModel.Decoder.ResetMemory()
+GC.Collect()
+//if i have the following list in python: [1,2,3,4,5]
+//What code will filter it to only odd numbers?
+//filter(lambda x: x % 2 == 1, [1,2,3,4,5]) then add 3
+//map(lambda x: x + 3, filter(lambda x: x % 2 == 1, [1,2,3,4,5]))
+
+flant5base.RunEncoder(
+    definition =
+        "In this task you will be given a question to answer. Keep the answer short. Use the provided context to answer.",
+    context = q,
+    contextname = "Context",
+    question = "What is algorithmic extrapolation?"
+) 
+
+flant5xl.RunEncoder("A two word phrase for being in a hurry is: ")
+
+//our constraint is word split by space len = 2
+let is2words (s: string) = s.Split(' ').Length = 2
 
 {db.Tokenize("hello, this is a test") with TokenIds = r.TokenIds |> Seq.map int64}
 
 model.RunT(db.Tokenize("hello, this is a test"))
+
+
+
+
 
 let bertTokenizer =
     Tokenizers.BlingFireTokenizer.NewBertTokenizer(@"D:\Downloads\NeuralNets\blingfire\")
@@ -225,9 +306,9 @@ sv.Process(
 
 sv.Vectors
 
-sv.GetNeighbors("rocs")
+sv.GetNeighbors("sun energy atom")
 
-sv.Intersection([| "food"; "minerals" |], 0.35f)
+sv.Intersection([| "sun"; "energy"; "atom" |], 0.25f)
 
 //--------
 

@@ -154,7 +154,7 @@ module ONNX =
             member t.Dispose() = t.Dispose()
   
       
-    type DecoderSampler(decoder:NNet<float32>, startToken, stopToken, ?blockStartTokenIndex, ?sentenceEndTokens : int[]) = 
+    type DecoderSampler(decoder:NNet<float32>, decodingStartToken, stopToken, ?blockStartTokenIndex, ?sentenceEndTokens : int[]) = 
                 
         let blockStartTokenIndex = defaultArg blockStartTokenIndex 3
         
@@ -165,7 +165,7 @@ module ONNX =
         let tokenEvent = Event<_>()
         
         let samplerinfo = {
-            StartToken = startToken
+            DecodingStartToken = decodingStartToken
             StopToken = stopToken
             BlockStartTokenIndex = blockStartTokenIndex
             MinSentLen = 0
@@ -244,7 +244,7 @@ module ONNX =
                 minlen
                 (defaultArg countBySentences false)
                 encoderHiddenState 
-                (defaultArg input [| startToken |])  
+                (defaultArg input [| decodingStartToken |])  
 
         member t.SamplerInfo = samplerinfo  
  
@@ -256,9 +256,9 @@ module ONNX =
                 decoder.Dispose()
                 repeatmem.Clear()     
         
-    type EncoderDecoderSampler(encoder:NNet<float32>, decoder:NNet<float32>, startToken, stopToken, ?blockStartTokenAtIndex, ?sentenceEndTokens : int []) = 
+    type EncoderDecoderSampler(encoder:NNet<float32>, decoder:NNet<float32>, decodingStartToken, stopToken, ?blockStartTokenAtIndex, ?sentenceEndTokens : int []) = 
         
-        let decoderModel = new DecoderSampler(decoder, startToken, stopToken, ?sentenceEndTokens = sentenceEndTokens, ?blockStartTokenIndex = blockStartTokenAtIndex)
+        let decoderModel = new DecoderSampler(decoder, decodingStartToken, stopToken, ?sentenceEndTokens = sentenceEndTokens, ?blockStartTokenIndex = blockStartTokenAtIndex)
         
         let mutable currentEncoderState = None 
 
@@ -281,7 +281,7 @@ module ONNX =
             countBySentences
             sampler
             (encoderInput: _ [])
-            =
+            (decoderInput: _ []) =        
             encoder.GC()
             let attentionMask = Array.create encoderInput.Length 1 
             let keys = (m.Encoder : NNet<float32>).InputKeys 
@@ -303,7 +303,8 @@ module ONNX =
                     seqlen = seqlen,
                     ?countBySentences = countBySentences,
                     ?sampler = sampler,
-                    encoderHiddenState = h
+                    encoderHiddenState = h,
+                    input = decoderInput
                 )
 
             encoder.GC()
@@ -321,7 +322,7 @@ module ONNX =
                 (defaultArg seqlen 120)
                 input 
 
-        member t.Run(input: int [], ?minlen, ?seqlen, ?countBySentences, ?sampler, ?EncoderHiddenStatesName) = 
+        member t.Run(input: int [], ?decoderInput, ?minlen, ?seqlen, ?countBySentences, ?sampler, ?EncoderHiddenStatesName) = 
             t.encoderDecoderSampler
                 (defaultArg EncoderHiddenStatesName "encoder_hidden_states") 
                 minlen
@@ -329,8 +330,9 @@ module ONNX =
                 countBySentences 
                 sampler
                 input
+                (defaultArg decoderInput [| decodingStartToken |])
 
-        member t.RunDecoderStep (input: _ [], ?encoderHiddenState, ?DecoderInputName) = 
+        member t.RunDecoderStepLogits (input: _ [], ?encoderHiddenState, ?DecoderInputName) = 
             let encoderstate = 
                 match encoderHiddenState with
                 | Some h -> h 
@@ -341,12 +343,17 @@ module ONNX =
 
             decoderModel.RunDecoderStep(input, EncoderState = encoderstate)
               
+        member t.RunDecoderStep(input: _ [], ?encoderHiddenState, ?DecoderInputName) =
+            //take logits then convert into a probability distribution 
+            let logits = t.RunDecoderStepLogits(input, ?encoderHiddenState = encoderHiddenState, ?DecoderInputName = DecoderInputName)
+            [|for i in 0 .. logits.Length - 1 -> i, exp(logits.[i])|]
+            |> Array.normalize
 
         member __.EncoderHiddenState with get() = currentEncoderState and set h = currentEncoderState <- h
 
         member __.TokenEvent = decoderModel.TokenEvent
         
-        member t.RunDecoderSampler(?seqlen, ?CountBySentences, ?encoderHiddenState) = 
+        member t.RunDecoderSampler(?input, ?seqlen, ?CountBySentences, ?encoderHiddenState) = 
             let encoderstate = 
                 match encoderHiddenState with
                 | Some h -> h 
@@ -355,7 +362,7 @@ module ONNX =
                     | None -> failwith "No encoder state"
                     | Some h -> h 
             
-            decoderModel.RunDecoderSampler(?seqlen = seqlen, ?countBySentences = CountBySentences, encoderHiddenState = encoderstate)
+            decoderModel.RunDecoderSampler(?input = input, ?seqlen = seqlen, ?countBySentences = CountBySentences, encoderHiddenState = encoderstate)
 
                 
         member t.RunEncoder(input: Tokenized<int>, ?encoderHiddenStatesName) = 

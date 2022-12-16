@@ -11,11 +11,16 @@ type PrependType =
     | Multiple of string []
     | Single of string 
     
-type Tokenized<'n> = {
-    TokenIds : 'n DenseTensor
-    AttentionMasks : 'n DenseTensor
-} 
+type Tokenized<'n> =
+    { TokenIds: 'n DenseTensor
+      AttentionMasks: 'n DenseTensor }
+    // a member that takes an array and a one of type n and returns a Tokenized<n>
+    static member ofArray (one: 'n, tokens: _ []) =
+        let attnmask = Array.create tokens.Length one
 
+        { TokenIds = array2D [ tokens ] |> Array2D.toTensor
+          AttentionMasks = array2D [ attnmask ] |> Array2D.toTensor }
+           
 type DocLoc = {GlobalLoc : int; InnerLoc : int}
 
 type BatchedTokens<'n> = {
@@ -192,7 +197,7 @@ module BPE =
     let byte_encoder = Dictionary (dict (Seq.zip chars bytes))
      
      
-type GeneralTokenizer(startToken, stopToken, maxlen, ?sepToken, ?endOfSentenceTokens) = 
+type GeneralTokenizer(startToken, stopToken, maxlen, ?sepToken, ?decoderStartToken, ?endOfSentenceTokens) = 
     let specialTokens =
         HashSet [ 
             match startToken with
@@ -246,8 +251,10 @@ type GeneralTokenizer(startToken, stopToken, maxlen, ?sepToken, ?endOfSentenceTo
     
     member __.StopToken = stoptoken
 
+    member __.DecoderStartToken = decoderStartToken
+
     abstract member Tokenizer : string -> int[]
-    default __.Tokenizer s = failwith "not implemented"
+    default __.Tokenizer _ = failwith "not implemented"
     
     abstract member Detokenize : int[] * ?skipSpecialTokens:bool -> string
     default __.Detokenize(ids: int [], ?skipSpecialTokens:bool) = 
@@ -280,31 +287,40 @@ type GeneralTokenizer(startToken, stopToken, maxlen, ?sepToken, ?endOfSentenceTo
             | Some stoptoken ->
                 t.Tokenizer s
                 |> appendStartEndTokens (startToken, stoptoken)
-        if res.Length > maxlen then
-            Result.Ok(res.[..maxlen - 1])
+        if res.Length < maxlen then
+            Result.Ok(res)
         else
-            Result.Error res        
+            Result.Error(res.[..maxlen - 1])      
     
-    member t.SplitToTokenizerWindow(prepend:string, str: string) =    
-        let sents = splitBySentences str 
+    member t.SplitToTokenizerWindow(prepend:string, input: string) =    
+        let sents = splitBySentences input 
         splitToTokenizerWindow (startToken, sepToken) (Some prepend) t.Tokenizer maxlen sents
 
     member t.SplitToTokenizerWindow(str: string) =    
         let sents = splitBySentences str 
         splitToTokenizerWindow (startToken, sepToken) None t.Tokenizer maxlen sents
         
-    member t.Tokenize(s: string seq, ?prepend) =
-        let tks, masks = t.TokenizeSplitAndPad (Seq.toArray s, ?prepend = prepend)
+    member t.Tokenize(input: string seq) =
+        let tks, masks = t.TokenizeSplitAndPad (Seq.toArray input)
 
         { TokenIds = Array2D.toTensor (array2D tks)
           AttentionMasks = Array2D.toTensor (array2D masks) }
 
-    member t.Tokenize(s: string, ?prepend) =
-        let strs = splitBySentences s |> Seq.toArray
-        let tks, masks = t.TokenizeSplitAndPad (strs, ?prepend = prepend)
+    member t.Tokenize(prepend:string, input: string seq) =
+        let tks, masks = t.TokenizeSplitAndPad (Seq.toArray input, prepend = prepend)
 
         { TokenIds = Array2D.toTensor (array2D tks)
           AttentionMasks = Array2D.toTensor (array2D masks) }
+
+    member t.Tokenize(str: string) =
+        splitBySentences str 
+        |> Seq.toArray
+        |> t.Tokenize
+        
+    member t.Tokenize(prepend:string, str: string) =
+        let sents = splitBySentences str
+        t.Tokenize(prepend, sents)
+        
 
     member t.BatchTokenize(s: string [][], ?startindex, ?prepends) =
         let start = defaultArg startindex 0
@@ -375,8 +391,8 @@ type BlingFireTokenizer(loc, startToken, stopToken, maxlen, unknownId, ?detokeni
         member t.Dispose() = t.Dispose()
          
 
-type SentencePieceTokenizer(loc, startToken, stopToken, maxlen, ?sepToken, ?endOfSentenceTokens) =
-    inherit GeneralTokenizer(startToken, stopToken, maxlen, ?sepToken = sepToken, ?endOfSentenceTokens = endOfSentenceTokens)
+type SentencePieceTokenizer(loc, startToken, stopToken, maxlen, ?sepToken, ?decoderStartToken, ?endOfSentenceTokens) =
+    inherit GeneralTokenizer(startToken, stopToken, maxlen, ?sepToken = sepToken,?decoderStartToken = decoderStartToken, ?endOfSentenceTokens = endOfSentenceTokens)
     let spiece = new SentencePieceDotNET.SentencePieceDotNET()
 
     do spiece.Load(loc)
@@ -397,13 +413,11 @@ type SentencePieceTokenizer(loc, startToken, stopToken, maxlen, ?sepToken, ?endO
         member t.Dispose() = t.Dispose()
      
     static member NewT5Tokenizer(loc) =
-        new SentencePieceTokenizer(loc, None, Some 1, 512, endOfSentenceTokens = [|5; 55; 58|])
+        new SentencePieceTokenizer(loc, None, Some 1, 512, decoderStartToken = 0,  endOfSentenceTokens = [|5; 55; 58|])
     
     static member NewDebertaTokenizer(loc) =
         new SentencePieceTokenizer(loc, Some 1, Some 2, 512)
-          
-module PadTokens =
-    let T5 = 0        
+               
 
     
 

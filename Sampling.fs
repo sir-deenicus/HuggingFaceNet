@@ -12,7 +12,7 @@ type SamplerOutput = {
 } 
 
 type SamplerInfo = {
-    StartToken : int 
+    DecodingStartToken : int 
     StopToken : int 
     BlockStartTokenIndex : int 
     MinSentLen : int
@@ -73,7 +73,7 @@ module Sampling =
 
     let argmax samplingInfo samplerState (logits: _ []) =
         if samplerState.SampleLen >= samplingInfo.BlockStartTokenIndex then
-            logits.[samplingInfo.StartToken] <- -infinityf
+            logits.[samplingInfo.DecodingStartToken] <- -infinityf
 
         //suppress end of sentence tokens while < minsentlen
         if samplerState.SampleLen < samplingInfo.MinSentLen then
@@ -84,7 +84,12 @@ module Sampling =
 
     let sample k p samplingInfo samplerState (logits: float32 []) = 
         if samplerState.SampleLen >= samplingInfo.BlockStartTokenIndex then
-            logits.[samplingInfo.StartToken] <- -infinityf
+            logits.[samplingInfo.DecodingStartToken] <- -infinityf
+
+        //what is the above line of code doing?
+        //Answer: it sets the probability of the start token to -infinity, so that it will never be chosen as the next token
+        //on the condition that the sample length is greater than or equal to the block start token index
+        //The reason for this is that the start token is used to indicate the start of a sentence, and we don't want to start a sentence in the middle of a sentence
 
         //suppress end of sentence tokens while < minsentlen
         if samplerState.SampleLen < samplingInfo.MinSentLen then
@@ -106,7 +111,7 @@ module Sampling =
 
     let sampleTypical k p samplingInfo samplerState (logits: float32 []) = 
         if samplerState.SampleLen >= samplingInfo.BlockStartTokenIndex then
-            logits.[samplingInfo.StartToken] <- -infinityf
+            logits.[samplingInfo.DecodingStartToken] <- -infinityf
 
         //suppress end of sentence tokens while < minsentlen
         if samplerState.SampleLen < samplingInfo.MinSentLen then
@@ -136,3 +141,25 @@ module Sampling =
         choices[i]
 
         
+    let subsetNucleus k p (probs: (_ * float32) []) = 
+        let choices = getLargeProbItems p probs   
+        if k > 0 then
+            choices |> Array.takeOrMax k  
+        else choices 
+
+    
+    let subsetTypical k p (probs: (_ * float32) []) =   
+        //what does the above line of code do?
+        //Answer: it normalizes the probabilities so that they sum to 1
+
+        let ent = -1f * (Array.sumBy (fun (_, p) -> p * log (p + 1e-30f)) probs)
+        //what does the above line of code do?
+        //Answer: it calculates the entropy of the probabilities
+        
+        let sorted = probs |> Array.sortBy (fun (_, p) -> abs (-log p - ent))  
+        //printfn "%A" sm
+        //what does the above line of code do?
+        //Answer: it sorts the probabilities by the absolute value of the difference between the log of the probability and the entropy of the probabilities (i.e. it sorts the probabilities by how different they are from the average probability)
+      
+        if k = 0 then getTopProbs p sorted 
+        else sorted |> Array.takeOrMax k |> getTopProbs p 
