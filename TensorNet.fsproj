@@ -1,15 +1,13 @@
-﻿<Project Sdk="Microsoft.NET.Sdk">
-
+<Project Sdk="Microsoft.NET.Sdk">
   <PropertyGroup>
     <TargetFramework>net5.0</TargetFramework>
-	<LangVersion>preview</LangVersion>
-	<Version>0.1.6</Version>
+    <LangVersion>preview</LangVersion>
+    <Version>0.2.0</Version>
     <GenerateDocumentationFile>true</GenerateDocumentationFile>
     <WarnOn>3390;$(WarnOn)</WarnOn>
     <Platforms>AnyCPU;x64</Platforms>
     <GeneratePackageOnBuild>True</GeneratePackageOnBuild>
   </PropertyGroup>
-
   <ItemGroup>
     <None Include="lab\hash-tests.fsx" />
     <None Include="lab\tokenizer-tests.fsx" />
@@ -21,6 +19,7 @@
     <None Include="Archive\sampler.fsx" />
     <Compile Include="Files.fs" />
     <Compile Include="Tensors.fs" />
+    <Compile Include="BPE-tokenizer.fs" />
     <Compile Include="Tokenizers.fs" />
     <Compile Include="Sampling.fs" />
     <Compile Include="ONNXnet.fs" />
@@ -28,9 +27,9 @@
     <Compile Include="NLP.fs" />
     <None Include="TestDocSnippets.fsx" />
   </ItemGroup>
-
   <ItemGroup>
     <PackageReference Include="BlingFire" Version="1.0.1" />
+    <PackageReference Include="FSharp.Control.AsyncSeq" Version="3.2.1" />
     <PackageReference Include="FsPickler" Version="5.3.2" />
     <PackageReference Include="K4os.Hash.xxHash" Version="1.0.8" />
     <PackageReference Include="MathNet.Numerics.FSharp" Version="5.0.0" />
@@ -38,11 +37,10 @@
     <PackageReference Include="MathNet.Numerics.Providers.MKL" Version="5.0.0" />
     <PackageReference Include="Microsoft.ML.OnnxRuntime.Managed" Version="1.13.1" />
     <PackageReference Include="Newtonsoft.Json" Version="13.0.1" />
+    <PackageReference Include="Prelude" Version="1.8.9" />
     <PackageReference Include="SentencePieceDotNET" Version="1.0.1" />
   </ItemGroup>
-
   <ItemGroup>
     <Folder Include="models\" />
   </ItemGroup>
-
 </Project>

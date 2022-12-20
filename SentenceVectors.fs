@@ -273,11 +273,9 @@ type SentenceVectors(tokenizer: GeneralTokenizer, model: ONNX.NNet<float32>, doc
     //function to tokenize, run input and multiply matrix
     member __.GetNeighborVectors(str: string) = getNeighborVectors str
 
-    member __.GetNeighbors(str: string, ?minthresh, ?useLenHeuristic) =
+    member __.GetNeighbors(str: string, ?minthresh) =
 
         let minthresh = defaultArg minthresh defaultSimilarityThreshold
-        let useHeuristic = defaultArg useLenHeuristic true
-
         let vs = getNeighborVectors str
 
         [| for i in 0 .. vs.Length - 1 do
@@ -285,16 +283,15 @@ type SentenceVectors(tokenizer: GeneralTokenizer, model: ONNX.NNet<float32>, doc
 
                if sim > minthresh then
                    let j = documents.Indices[i].GlobalLoc
-                   let docitem = documents.GetDoc j
-                   let txtlen = docitem.Text.Split(' ').Length
-
+                   let docitem = documents.GetDoc j 
+                   let start, stop = documents.Indices.[i].InnerLoc
                    let str =
-                       if useHeuristic
-                          && tokenizer.MaxContextWindowLen > txtlen * 2 then
-                           docitem.Text
+                       //if the text is the full document, then just return it, no need to split
+                       if start = 0 && stop = docitem.Text.Length - 1 then
+                            docitem.Text
                        else
-                           let k = documents.Indices[i].InnerLoc
-                           tokenizer.SplitToTokenizerWindow(docitem.Text).[k]
+                            let sents = docitem.Text |> splitBySentences
+                            sents.[start..stop] |> String.concat " " 
 
                    { Title = docitem.Title
                      Text = str
@@ -302,10 +299,8 @@ type SentenceVectors(tokenizer: GeneralTokenizer, model: ONNX.NNet<float32>, doc
         |> Array.sortByDescending (fun d -> d.Similarity)
 
 
-    member __.Intersection(strs: string seq, ?threshold: float32, ?useLenHeuristic) =
+    member __.Intersection(strs: string seq, ?threshold: float32) =
         let threshold = defaultArg threshold defaultSimilarityThreshold
-        let useLenHeuristic = defaultArg useLenHeuristic true
-
         let space =
             [| for str in strs do
                    let vs = getNeighborVectors str
@@ -316,14 +311,14 @@ type SentenceVectors(tokenizer: GeneralTokenizer, model: ONNX.NNet<float32>, doc
 
                               if sim > threshold then
                                   let doc = documents.GetDoc documents.Indices.[i].GlobalLoc
-                                  let j = documents.Indices.[i].InnerLoc
+                                  let start, stop = documents.Indices.[i].InnerLoc
 
                                   let txt =
-                                      if useLenHeuristic
-                                         && tokenizer.MaxContextWindowLen > doc.Text.Split(' ').Length * 2 then
-                                          doc.Text
+                                      if start = 0 && stop = doc.Text.Length - 1 then
+                                          doc.Text 
                                       else
-                                          tokenizer.SplitToTokenizerWindow(doc.Text).[j]
+                                            let sents = splitBySentences doc.Text
+                                            sents.[start..stop] |> String.concat " "
 
                                   txt, vs.[i] |]
 

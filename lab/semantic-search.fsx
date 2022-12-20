@@ -1,4 +1,12 @@
-﻿ 
+﻿//Write each letter of Snapplebees comma seperated:
+//S,n,a,p,p,l,e,b,e,e,s
+//reverse the letters
+//s,e,e,b,e,l,p,p,a,n,s
+//sort the letters alphabetically
+//a,b,e,e,e,l,n,p,p,s,s
+//drop the vowels
+//b,l,n,p,p,s,s
+ 
 #I @"C:\Users\cybernetic\.nuget\packages\"
 #I @"D:\Downloads\NeuralNets\onnx1.13"
 #I @"C:\Users\cybernetic\source\repos\"
@@ -26,8 +34,12 @@ open Newtonsoft.Json
 open TensorNet.Tokenizers
 open TensorNet.NLP
 
-let model =
-    new ONNX.NNet<float32>(@"D:\Downloads\NeuralNets\deberta-v3-nli-base\deberta-v3-nli-base.onnx")
+
+let gpt =
+    new ONNX.NNet<float32>(@"D:\Downloads\NeuralNets\codegen\onnx\codegen-quantized.onnx")
+
+let debertaV3 =
+    new ONNX.NNet<float32>(@"D:\Downloads\NeuralNets\deberta-v3-nli-x\deberta-v3-nli-x-quantized.onnx")
     
 let model =
     new ONNX.NNet<float32>(@"D:\Downloads\NeuralNets\all-MiniLM-L6-v2\all-MiniLM-L6-v2.onnx")
@@ -38,18 +50,36 @@ let model2 =
 let model3 =
     new ONNX.NNet<float32>(@"D:\Downloads\NeuralNets\all-MiniLM-L6-v2\all-MiniLM-L6-v2-quantized.onnx")
 
-let db = Tokenizers.SentencePieceTokenizer.NewDebertaTokenizer(@"D:\Downloads\NeuralNets\deberta-v3-nli-base\spm.model")
-
 Tokenizers.initBlingFire @"D:\Downloads\NeuralNets\blingfire\blingfiretokdll.dll"
- 
-let flant5tokenizer = Tokenizers.SentencePieceTokenizer.NewT5Tokenizer(@"D:\Downloads\NeuralNets\flan-t5-small\spiece.model")
+
+let debertaTokenizer = Tokenizers.SentencePieceTokenizer.NewDebertaTokenizer(@"D:\Downloads\NeuralNets\deberta-v3-nli-base\spm.model")
+
+let toks = debertaTokenizer.Tokenize("Henry, the first king of france could always raise a large treasury", "was the first king of france rich")
+
+let r = debertaV3.RunT(toks)[0]
+
+let codegentok = Tokenizers.BPETokenizer.NewCodeGenTokenizer(@"D:\Downloads\NeuralNets\codegen", addedTokensPath = @"D:\Downloads\NeuralNets\codegen\added_tokens.json")
+
+let gptcode = new  ONNX.DecoderSampler(gpt, codegentok.StopToken)  
+   
+let ts = codegentok.Encode("""# a function to generate odd numbers using list comprehensions:
+def odd_numbers(n):
+    return [x for x""")
+
+let r = gptcode.RunDecoderSampler(input = ts, seqlen = 60)
+
+codegentok.Decode(r.Tokens)
+
+r.Tokens |> Array.map string |> String.concat ", "
+
+
+let flant5tokenizer = Tokenizers.SentencePieceTokenizer.NewT5Tokenizer(@"D:\Downloads\NeuralNets\flan-t5-xxl\spiece.model")
  
 let q = "Language models (LMs) are trained on collections of documents, written by individual human agents to achieve specific goals in an outside world. During training, LMs have access only to text of these documents, with no direct evidence of the internal states of the agents that produced them -- a fact often used to argue that LMs are incapable of modeling goal-directed aspects of human language production and comprehension. Can LMs trained on text learn anything at all about the relationship between language and use? I argue that LMs are models of intentional communication in a specific, narrow sense."
 let q = """Machine learning systems perform well on pattern matching tasks, but their ability to perform algorithmic or logical reasoning is not well understood. One important reasoning capability is algorithmic extrapolation, in which models trained only on small/simple reasoning problems can synthesize complex strategies for large/complex problems at test time. Algorithmic extrapolation can be achieved through recurrent systems, which can be iterated many times to solve difficult reasoning problems. We observe that this approach fails to scale to highly complex problems because behavior degenerates when many iterations are applied -- an issue we refer to as "overthinking." We propose a recall architecture that keeps an explicit copy of the problem instance in memory so that it cannot be forgotten. We also employ a progressive training routine that prevents the model from learning behaviors that are specific to iteration number and instead pushes it to learn behaviors that can be repeated indefinitely. These innovations prevent the overthinking problem, and enable recurrent systems to solve extremely hard extrapolation tasks."""
 let instr = "Definition: In this task, you are given the abstract of a research paper. Your task is to describe the key question being studied. Input: " + q + ". Output: "//"Definition: Create a bullet point list of the 4 main ideas covered in the text . Input: " + q + " Output: "
 let instr = "Definition: In this task, you must identify and list all of the key concepts of the text. The concepts must consist of more than one word. For example 'machine learning' is correct and 'machine','learning' is wrong. Input: " + q + ". Output: "
 let instr = "Definition: In this task, you must identify and list all of the concepts of the text. Input: " + q + ". Output: "
-
 let instr = "Definition: In this task, In this task you will be given a question to answer. Keep the answer short. Use the provided context to answer. Context: " + q + ". Question: How does algorithmic extrapolation work? Answer: " // *
 let instr = "Definition: In this task, you must identify and list all of the subjects of the text. Input: " + q + ". Output: " // *
 let instr = "Definition: For this task two steps are to be performed. Summarize the given text into a title that captures the main concept in the text. The title should be long. Input: " + q + ". Output: "
@@ -57,20 +87,22 @@ let instr = "Definition: For this task two steps are to be performed. Summarize 
  
 let flant5base = new EncoderDecoder(@"D:\Downloads\NeuralNets\flan-t5-xl\encoder\flan-t5-xl-encoder.onnx", flant5tokenizer, isQuantized = false)
 
+let flant5Large = new EncoderDecoder(@"D:\Downloads\NeuralNets\flan-t5-large\flan-t5-large", flant5tokenizer)
+
 let flant5xl = new EncoderDecoder(@"D:\Downloads\NeuralNets\flan-t5-xl\encoder\flan-t5-xl-encoder.onnx", @"D:\Downloads\NeuralNets\flan-t5-xl\decoder\flan-t5-xl-decoder.onnx", flant5tokenizer)
 
-flant5base.Run("A word for when you're feeling discouraged by all the cool stuff everyone else is doing is ", sampler = Sampling.sample 0 0.7f)
+flant5Large.Run("A word for when you're feeling discouraged by all the cool stuff everyone else is doing is ", maxlen = 6, sampler = Sampling.sample 0 0.7f)
 
-flant5xl.Run(
+flant5Large.Run(
     definition =
-        "In this task you will be given a question to answer. Keep the answer short. Use the provided context to answer.",
+       // "In this task you will be given a question to answer. Keep the answer short. Use the provided context to answer.",
         //"In this task, you must identify and list all of the subjects of the text",
-        //"Definition: In this task, you are given the abstract of a research paper. Your task is to describe the key question being studied.",
+        "Definition: In this task, you are given the abstract of a research paper. Your task is to describe the key question being studied.",
     context = q,
-    contextname = "Context",
-    question = "What does algorithmic extrapolation do?", //what is, what are the properties of, what does X do
-    sampler = Sampling.sample 0 0.1f
-    //maxlen = 20
+  //  contextname = "Context",
+//    question = "What does algorithmic extrapolation do?", //what is, what are the properties of, what does X do
+    sampler = Sampling.sample 0 0.1f,
+    maxlen = 9
 )
 //q + ". In summary: "
 

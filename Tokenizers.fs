@@ -5,6 +5,7 @@ open System
 open BlingFire
 open TensorExtensions 
 open System.Collections.Generic 
+open TensorNet
 
 [<RequireQualifiedAccess>]
 type PrependType =
@@ -15,13 +16,13 @@ type Tokenized<'n> =
     { TokenIds: 'n DenseTensor
       AttentionMasks: 'n DenseTensor }
     // a member that takes an array and a one of type n and returns a Tokenized<n>
-    static member ofArray (one: 'n, tokens: _ []) =
+    static member ofArray (one: 'n) (tokens: _ []) =
         let attnmask = Array.create tokens.Length one
 
         { TokenIds = array2D [ tokens ] |> Array2D.toTensor
           AttentionMasks = array2D [ attnmask ] |> Array2D.toTensor }
            
-type DocLoc = {GlobalLoc : int; InnerLoc : int}
+type DocLoc = {GlobalLoc : int; InnerLoc : (int * int)}
 
 type BatchedTokens<'n> = {
     Indices : DocLoc  []
@@ -120,56 +121,12 @@ let tokenizeSplit tokenize maxlen (sents : _ []) =
     let rec loop i =
         [| if i < sents.Length then 
             let (tks : int []), j = tokenize maxlen i sents  
-            if tks.Length > 2 || (tks.Length = 2 && tks.[1] = 1) then yield tks //T5 can have len = 2, hard code this
+            if tks.Length > 2 || (tks.Length = 2 && tks.[1] = 1) then yield (i,j), tks //T5 can have len = 2, hard code this
             // if i = j and there're more sents left then a sentence was probably too long. We can either fail or skip. Given token window lens are > 300 to 600 words, I will choose to skip.
-            let j' =
-                if i = j then j + 1
-                else j
-            yield! loop j' |]
-    loop 0 
-     
-     
-let splitToTokenizerWindow (startToken, septoken) prepended tokenizer maxlen (sents : _ []) =
-    //Code uses tokenizer for dummy runs to split text. Easier to just repeat code. Also cheaper than doing both at once.
-    let tokenizeSentenceSize maxlen i0 (sents: string []) =
-        let tokenlenInit = 
-            let tokenlen =
-                match startToken with 
-                | None -> 0 
-                | Some startToken -> 1
-            match prepended with 
-            | None -> tokenlen 
-            | Some txt -> 
-                let prependedTokens : int [] = tokenizer txt
-                match septoken with 
-                | None -> tokenlen + prependedTokens.Length + 1
-                | Some _ -> tokenlen + prependedTokens.Length + 2 //1 + 1
-
-        let section = ResizeArray()
-        let rec loop i tokenlen =
-            let sent = sents.[i]
-            let tokenized = tokenizer sent
-            let tokenlen' = tokenlen + tokenized.Length
-
-            if tokenlen' + 1 < maxlen then // account for stop tag
-                if i + 1 < sents.Length then   
-                    section.Add(sent)
-                    loop (i + 1) tokenlen'
-                else 
-                    section.Add(sent)
-                    i + 1
-            else i
-
-        let i = loop i0 tokenlenInit
-        String.concat " " section, i
-        
-    let rec loop i =
-        [| if i < sents.Length then 
-            let (tks : string), j = tokenizeSentenceSize maxlen i sents  
-            if tks.Length > 0 then yield tks 
             let j' = if i = j then j + 1 else j
             yield! loop j' |]
-    loop 0
+    loop 0 
+      
  
 let appendStartEndTokens (startToken, stopToken) s =
     [| match startToken with
@@ -177,27 +134,9 @@ let appendStartEndTokens (startToken, stopToken) s =
        | Some startToken -> yield startToken
        yield! s
        yield stopToken |] 
-
-
-module BPE =
-    let internal bytes =
-        List.map byte ([ '!' .. '~' ] @ [ '¡' .. '¬' ] @ [ '®' .. 'ÿ' ])
-        |> HashSet
-
-    let mutable internal n = 0
-
-    let internal chars =
-        [| yield! Seq.map char bytes
-           for b in 0uy .. 255uy do
-               if not (bytes.Contains b) then
-                   bytes.Add b |> ignore
-                   yield char (256 + n)
-                   n <- n + 1 |]
-
-    let byte_encoder = Dictionary (dict (Seq.zip chars bytes))
+ 
      
-     
-type GeneralTokenizer(startToken, stopToken, maxlen, ?sepToken, ?decoderStartToken, ?endOfSentenceTokens) = 
+type GeneralTokenizer(startToken, stopToken, maxlen, ?sepToken, ?decoderStartToken, ?endOfSentenceTokens, ?newLineToken) = 
     let specialTokens =
         HashSet [ 
             match startToken with
@@ -218,7 +157,7 @@ type GeneralTokenizer(startToken, stopToken, maxlen, ?sepToken, ?decoderStartTok
     let flattenTokenBatch maxlen start prepends tokenizer (strs: _ []) =
         let flattened =
             [| for i in 0 .. strs.Length - 1 do
-                   let tokens =
+                   let tokensdat =
                        tokenizeSplit
                            (tokenize
                                (startToken, stoptoken, sepToken)
@@ -231,8 +170,9 @@ type GeneralTokenizer(startToken, stopToken, maxlen, ?sepToken, ?decoderStartTok
                            maxlen
                            strs[i]
 
-                   for j in 0 .. tokens.Length - 1 do
-                       {GlobalLoc = start + i; InnerLoc = j}, tokens[j] |]
+                   for j in 0 .. tokensdat.Length - 1 do
+                       let (sentsStart, sentsStop), tokens = tokensdat[j]
+                       {GlobalLoc = start + i; InnerLoc = (sentsStart, sentsStop)}, tokens|]
 
         let lookup, flatids = Array.unzip flattened
         let paddedIds, masks = attentionMaskAndPad flatids
@@ -247,6 +187,8 @@ type GeneralTokenizer(startToken, stopToken, maxlen, ?sepToken, ?decoderStartTok
 
     member __.EndOfSentenceTokens = endOfSentenceTokens
 
+    member __.NewLineToken = newLineToken
+
     member __.StartToken = startToken
     
     member __.StopToken = stoptoken
@@ -260,14 +202,20 @@ type GeneralTokenizer(startToken, stopToken, maxlen, ?sepToken, ?decoderStartTok
     default __.Detokenize(ids: int [], ?skipSpecialTokens:bool) = 
         failwith "not implemented"
 
-    member private t.TokenizeSplitAndPad(s: string [], ?prepend) =
+    member private t.TokenizeSplitAndPad(prepend:string, s: string []) =
+        let prependOption = if prepend = "" then None else Some prepend
         let tokens =
             tokenizeSplit
-                (tokenize (startToken, stoptoken, sepToken) prepend t.Tokenizer)
+                (tokenize (startToken, stoptoken, sepToken) prependOption t.Tokenizer)
                 maxlen
                 s
+            |> Array.unzip
+            |> snd
 
         attentionMaskAndPad tokens
+
+    member private t.TokenizeSplitAndPad(s: string []) =
+        t.TokenizeSplitAndPad("", s)
 
     member __.MaxContextWindowLen = maxlen 
 
@@ -291,15 +239,7 @@ type GeneralTokenizer(startToken, stopToken, maxlen, ?sepToken, ?decoderStartTok
             Result.Ok(res)
         else
             Result.Error(res.[..maxlen - 1])      
-    
-    member t.SplitToTokenizerWindow(prepend:string, input: string) =    
-        let sents = splitBySentences input 
-        splitToTokenizerWindow (startToken, sepToken) (Some prepend) t.Tokenizer maxlen sents
-
-    member t.SplitToTokenizerWindow(str: string) =    
-        let sents = splitBySentences str 
-        splitToTokenizerWindow (startToken, sepToken) None t.Tokenizer maxlen sents
-        
+       
     member t.Tokenize(input: string seq) =
         let tks, masks = t.TokenizeSplitAndPad (Seq.toArray input)
 
@@ -307,7 +247,7 @@ type GeneralTokenizer(startToken, stopToken, maxlen, ?sepToken, ?decoderStartTok
           AttentionMasks = Array2D.toTensor (array2D masks) }
 
     member t.Tokenize(prepend:string, input: string seq) =
-        let tks, masks = t.TokenizeSplitAndPad (Seq.toArray input, prepend = prepend)
+        let tks, masks = t.TokenizeSplitAndPad (prepend, Seq.toArray input)
 
         { TokenIds = Array2D.toTensor (array2D tks)
           AttentionMasks = Array2D.toTensor (array2D masks) }
@@ -359,8 +299,8 @@ type GeneralTokenizer(startToken, stopToken, maxlen, ?sepToken, ?decoderStartTok
         
 
          
-type BlingFireTokenizer(loc, startToken, stopToken, maxlen, unknownId, ?detokenizer, ?sepToken, ?endOfSentenceTokens) =
-    inherit GeneralTokenizer(startToken, stopToken, maxlen, ?sepToken = sepToken, ?endOfSentenceTokens = endOfSentenceTokens)
+type BlingFireTokenizer(loc, startToken, stopToken, maxlen, unknownId, ?detokenizer, ?sepToken, ?endOfSentenceTokens, ?newLineToken) =
+    inherit GeneralTokenizer(startToken, stopToken, maxlen, ?sepToken = sepToken, ?endOfSentenceTokens = endOfSentenceTokens, ?newLineToken = newLineToken)
     let tokHandle = BlingFireUtils2.LoadModel loc
 
     member __.TokenizerHandle = tokHandle
@@ -384,9 +324,6 @@ type BlingFireTokenizer(loc, startToken, stopToken, maxlen, unknownId, ?detokeni
     static member NewRobertaTokenizer(loc) =
         new BlingFireTokenizer(IO.Path.Combine(loc, "roberta.bin"), Some 0, Some 2, 512, 3, sepToken = 2) 
 
-    static member NewGPT2Tokenizer(loc,?windowsize) =
-        new BlingFireTokenizer(IO.Path.Combine(loc, "gpt2.bin"), Some 2, None, defaultArg windowsize 512, 2, endOfSentenceTokens = [|764; 5145; 5633; 220|])
-    
     interface IDisposable with
         member t.Dispose() = t.Dispose()
          
@@ -417,11 +354,83 @@ type SentencePieceTokenizer(loc, startToken, stopToken, maxlen, ?sepToken, ?deco
     
     static member NewDebertaTokenizer(loc) =
         new SentencePieceTokenizer(loc, Some 1, Some 2, 512)
-               
+                
+
+type BPETokenizer(vocab:Dictionary<_,_>, merges : string [], startToken, stopToken, maxlen, ?endOfSentenceTokens, ?newLineToken, ?addedTokensPath) =
+    inherit GeneralTokenizer(startToken, stopToken, maxlen, ?endOfSentenceTokens = endOfSentenceTokens, ?newLineToken = newLineToken)
+ 
+    let bpe_merges =
+        [ for merge in merges do
+            let m = merge.Split(' ')
+            (m.[0], m.[1]) ]
+
+    let bpe_ranks =
+        bpe_merges
+        |> Seq.mapi (fun i (a, b) -> (a, b), i)
+        |> dict
+        |> Dictionary
+ 
+    let cache = Dictionary<string, string []>()
+         
+    let idToTokenDict =
+        vocab
+        |> Seq.map (fun (KeyValue (k, v)) -> (v, k))
+        |> dict
+        |> Dictionary
+
+    let addedTokens = 
+        match addedTokensPath with 
+        | None -> Dictionary()
+        | Some path ->
+            IO.File.ReadAllText(path) 
+            |> Newtonsoft.Json.JsonConvert.DeserializeObject<Dictionary<string,int>>
+            |> Seq.map (fun (KeyValue(k,v)) -> v,k)
+            |> dict
+            |> Dictionary
+
+
+    new(tokenizerjson:string, startToken, stopToken, maxlen, ?endOfSentenceTokens, ?newLineToken, ?addedTokensPath) =
+        let jsontxt = IO.File.ReadAllText tokenizerjson 
+        let tokenizerdat =
+            Newtonsoft.Json.JsonConvert.DeserializeObject<BPE.BPETokenizerData>(jsontxt)
+
+        let vocab = tokenizerdat.Model.Vocab
+        let merges = tokenizerdat.Model.Merges
+        BPETokenizer(vocab, merges, startToken, stopToken, maxlen, ?endOfSentenceTokens = endOfSentenceTokens, ?newLineToken = newLineToken, ?addedTokensPath = addedTokensPath)
+
+    new(vocabjsonloc:string, mergetxtloc:string, startToken, stopToken, maxlen, ?endOfSentenceTokens, ?newLineToken, ?addedTokensPath) =
+        let jsontxt = IO.File.ReadAllText vocabjsonloc 
+        let vocab = Newtonsoft.Json.JsonConvert.DeserializeObject<Dictionary<string, int>>(jsontxt)
+        let merges = IO.File.ReadAllLines mergetxtloc
+        BPETokenizer(vocab, merges[1..], startToken, stopToken, maxlen, ?endOfSentenceTokens = endOfSentenceTokens, ?newLineToken = newLineToken, ?addedTokensPath = addedTokensPath)
+        
+    member __.Encode (s: string) = BPE.bpeEncoder bpe_ranks cache vocab s
+    member __.Decode (ids: int []) = BPE.bpeDecoder idToTokenDict addedTokens BPE.byte_encoder ids
+
+    override t.Tokenizer s = t.Encode s
+
+    override t.Detokenize(ids: int [], ?skipSpecialTokens) =
+        match skipSpecialTokens with
+        | Some true ->
+            ids
+            |> Array.filter (t.SpecialTokens.Contains >> not)
+        | _ -> ids
+        |> t.Decode
+
+    static member NewGPTJTokenizer(loc, ?addedTokensPath) =
+        new BPETokenizer(IO.Path.Combine(loc, "tokenizer.json"), None, Some 50256, 2048, endOfSentenceTokens = [|0; 13; 30|], newLineToken = 198, ?addedTokensPath = addedTokensPath)
+
+    static member NewCodeGenTokenizer(loc, ?addedTokensPath) =
+        new BPETokenizer(IO.Path.Combine(loc, "tokenizer.json"), None, Some 50256, 2048, endOfSentenceTokens = [|0; 13; 30|], newLineToken = 198, ?addedTokensPath = addedTokensPath)
+
+    static member NewGalacticaTokenizer(loc, ?addedTokensPath) =
+        new BPETokenizer(IO.Path.Combine(loc, "tokenizer.json"), None, Some 2, 2048, endOfSentenceTokens = [|23; 36; 53|], newLineToken = 221, ?addedTokensPath = addedTokensPath)
+
+    static member NewRobertaTokenizer(loc) =
+        new BPETokenizer(IO.Path.Combine(loc, "vocab.json"), IO.Path.Combine(loc, "merges.txt"), Some 0, Some 2, 512)
+    
 
     
-
     
     
-            
     

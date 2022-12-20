@@ -12,7 +12,7 @@ type SamplerOutput = {
 } 
 
 type SamplerInfo = {
-    DecodingStartToken : int 
+    DecodingStartToken : int option
     StopToken : int 
     BlockStartTokenIndex : int 
     MinSentLen : int
@@ -71,9 +71,9 @@ module Sampling =
 
         cummProb 0
 
-    let argmax samplingInfo samplerState (logits: _ []) =
-        if samplerState.SampleLen >= samplingInfo.BlockStartTokenIndex then
-            logits.[samplingInfo.DecodingStartToken] <- -infinityf
+    let argmax samplingInfo samplerState (logits: _ []) = 
+        if samplerState.SampleLen >= samplingInfo.BlockStartTokenIndex && samplingInfo.DecodingStartToken.IsSome then
+            logits.[samplingInfo.DecodingStartToken.Value] <- -infinityf 
 
         //suppress end of sentence tokens while < minsentlen
         if samplerState.SampleLen < samplingInfo.MinSentLen then
@@ -82,9 +82,9 @@ module Sampling =
         Array.argmaxf32 logits
 
 
-    let sample k p samplingInfo samplerState (logits: float32 []) = 
-        if samplerState.SampleLen >= samplingInfo.BlockStartTokenIndex then
-            logits.[samplingInfo.DecodingStartToken] <- -infinityf
+    let sample k p samplingInfo samplerState (logits: float32 []) =  
+        if samplerState.SampleLen >= samplingInfo.BlockStartTokenIndex && samplingInfo.DecodingStartToken.IsSome then
+            logits.[samplingInfo.DecodingStartToken.Value] <- -infinityf
 
         //what is the above line of code doing?
         //Answer: it sets the probability of the start token to -infinity, so that it will never be chosen as the next token
@@ -109,9 +109,9 @@ module Sampling =
 
         choices[i]
 
-    let sampleTypical k p samplingInfo samplerState (logits: float32 []) = 
-        if samplerState.SampleLen >= samplingInfo.BlockStartTokenIndex then
-            logits.[samplingInfo.DecodingStartToken] <- -infinityf
+    let sampleTypical k p samplingInfo samplerState (logits: float32 []) =  
+        if samplerState.SampleLen >= samplingInfo.BlockStartTokenIndex && samplingInfo.DecodingStartToken.IsSome then
+            logits.[samplingInfo.DecodingStartToken.Value] <- -infinityf
 
         //suppress end of sentence tokens while < minsentlen
         if samplerState.SampleLen < samplingInfo.MinSentLen then

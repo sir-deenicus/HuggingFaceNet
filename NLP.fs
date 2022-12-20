@@ -78,7 +78,7 @@ type EncoderDecoder(encoder:ONNX.NNet<float32>, decoder : ONNX.NNet<float32>, to
     //version that takes a definition, context, and question
     member this.RunEncoder(definition:string, context:string, ?contextname, ?question) =
         let tokens = processContext definition context contextname question
-        encoderDecoderModel.RunEncoder(Tokenized.ofArray(1, tokens))
+        encoderDecoderModel.RunEncoder(Tokenized.ofArray 1 tokens)
 
     member this.RunDecoderStep(tokens) =
         encoderDecoderModel.RunDecoderStep(tokens)

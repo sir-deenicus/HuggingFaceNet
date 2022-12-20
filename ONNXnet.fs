@@ -154,7 +154,7 @@ module ONNX =
             member t.Dispose() = t.Dispose()
   
       
-    type DecoderSampler(decoder:NNet<float32>, decodingStartToken, stopToken, ?blockStartTokenIndex, ?sentenceEndTokens : int[]) = 
+    type DecoderSampler(decoder:NNet<float32>, stopToken, ?decodingStartToken, ?blockStartTokenIndex, ?sentenceEndTokens : int[]) = 
                 
         let blockStartTokenIndex = defaultArg blockStartTokenIndex 3
         
@@ -170,6 +170,8 @@ module ONNX =
             BlockStartTokenIndex = blockStartTokenIndex
             MinSentLen = 0
         }      
+
+        let mutable interruptGeneration = false
         
         //Do max sentences instead of maxlen
         let decoderSampler samplerfn decoderInputName maxlen minlen countsents (encoderStates : _ option) (initialTokens : _ [])= 
@@ -182,7 +184,7 @@ module ONNX =
             let mutable stop = false 
             repeatmem.Clear()
 
-            while c < maxlen && not stop do 
+            while c < maxlen && not stop && not interruptGeneration do
                 let logits =
                     decoder.RunT(
                         [| yield generated.ToOnnxValue decoderInputName
@@ -237,6 +239,14 @@ module ONNX =
         member t.RunDecoderSampler(?minlen, ?seqlen, ?countBySentences, ?sampler, ?input, ?encoderHiddenState) =  
             let samplerfn = defaultArg sampler Sampling.argmax 
             
+            let input = 
+                //if decoderStartToken is none and input is none fail
+                match input with
+                | Some input -> input
+                | None -> match decodingStartToken with
+                          | Some decodingStartToken -> [| decodingStartToken |]
+                          | None -> failwith "No input or decoding start token provided"
+                
             decoderSampler
                 samplerfn
                 decoder.InputKeys[decoder.InputIndex]
@@ -244,12 +254,11 @@ module ONNX =
                 minlen
                 (defaultArg countBySentences false)
                 encoderHiddenState 
-                (defaultArg input [| decodingStartToken |])  
+                input
 
         member t.SamplerInfo = samplerinfo  
  
-        member __.SentenceEndTokens = sentenceEndTokens
-        
+        member __.SentenceEndTokens = sentenceEndTokens 
  
         interface IDisposable with 
             member t.Dispose() = 
